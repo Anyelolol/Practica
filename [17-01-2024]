@@ -1,0 +1,30 @@
+[17-01-2024] Planificacion y requerimientos
+
+titulo = codigo vale de gas
+
+requerimientos = 
+
+-lenguage = revisar (java-py-SQL)
+
+- datos de identificacionn bases  =
+    - nombre
+    - rut
+    - id
+    - direcion
+    - edad
+
+- funciones requeridas =
+    - inicio seccion/login
+    - ingreso de datos identificadores
+    - guardar datos de identificacion
+    - verificador por nombre y rut
+    - verificador de ultimo digito de rut
+    - sistema vale de gas 
+    - espera de aproximadamente un mes si la pesosona 
+      ya a resivido un vale de gas
+   
+
+- Plasos =
+    - en revicion
+
+ 
