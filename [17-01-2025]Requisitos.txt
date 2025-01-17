@@ -1,0 +1,31 @@
+[17-01-2025] Planificacion y requerimientos
+
+titulo = codigo vale de gas
+
+requerimientos = 
+
+-lenguage = revisar (java-py-SQL)
+
+- datos de identificacionn (ejemplo)  =
+    - nombre
+    - rut
+    - direcion
+    - edad
+
+- funciones requeridas =
+    - inicio seccion/login
+    - ingreso de datos identificadores
+    - guardar datos de identificacion
+    - verificador por nombre y rut
+    - verificador de ultimo digito de rut
+    - sistema de registro vale de gas 
+    - espera de aproximadamente un mes si la pesosona 
+      ya a resivido un vale de gas
+   
+- Plasos =
+  - en revicion
+     - semana 1 [20 a 24 enero]
+     - semana 2 [27 a 31 enero]
+     - semana 3 [3  a 7  febrero]
+     - semana 4 [10 a 14 febrero]
+     - semana 5 [17 a 21 febrero]
