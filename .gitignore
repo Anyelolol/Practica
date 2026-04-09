@@ -1,10 +1,18 @@
-# Ignorar todo por defecto
+# Ignorar todo lo demás
 *
 
-# Excepto las carpetas Tutorial_1 y Tutorial_2
+# Excepto los tutoriales y sus archivos
 !Tutorial_1/
-!Tutorial_2/
+!Tutorial_1/*.py
+!Tutorial_1/*.png
 
-# También excluir archivos ocultos y de sistema
-.*
+!Tutorial_2/
+!Tutorial_2/*.py
+
+# Excepto .gitignore y README
 !.gitignore
+!README.md
+
+# Ignorar basura de Python
+__pycache__/
+*.pyc
