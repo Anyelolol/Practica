@@ -1,0 +1,10 @@
+# Ignorar todo por defecto
+*
+
+# Excepto las carpetas Tutorial_1 y Tutorial_2
+!Tutorial_1/
+!Tutorial_2/
+
+# También excluir archivos ocultos y de sistema
+.*
+!.gitignore
