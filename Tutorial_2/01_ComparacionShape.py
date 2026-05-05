@@ -321,7 +321,6 @@ def cargar_imagen(label_destino):
 def comparar_patrones():
     global imagen_para_comparar
 
-    # 🔴 labels (IMPORTANTE)
     labels_img = [LImagenPatron1, LImagenPatron2, LImagenPatron3]
     labels_txt = [LTextoPatron1, LTextoPatron2, LTextoPatron3]
 
@@ -334,10 +333,8 @@ def comparar_patrones():
         messagebox.showerror("Error", "No hay patrones guardados en la carpeta")
         return
 
-    # 🔥 lista de resultados (EL ERROR ESTABA AQUÍ)
     resultados = []
 
-    # 🔥 imagen actual
     img_actual_np = np.array(imagen_para_comparar)
     _, thresh_actual = cv2.threshold(img_actual_np, 127, 255, cv2.THRESH_BINARY)
 
@@ -358,7 +355,6 @@ def comparar_patrones():
 
     contorno_actual = max(contornos_actual, key=cv2.contourArea)
 
-    # 🔍 comparar con patrones
     for archivo in archivos:
         if archivo.endswith(".png"):
             path = os.path.join(CARPETA_PATRONES, archivo)
@@ -377,7 +373,6 @@ def comparar_patrones():
                 (img_actual_bin.shape[1], img_actual_bin.shape[0])
             )
 
-            # 🔥 IoU (área negra)
             interseccion = np.logical_and(img_actual_bin, img_patron_resized).sum()
             union = np.logical_or(img_actual_bin, img_patron_resized).sum()
             score_iou = interseccion / union if union != 0 else 0
@@ -393,7 +388,6 @@ def comparar_patrones():
 
             contorno_patron = max(contornos_patron, key=cv2.contourArea)
 
-            # 🔥 matchShapes
             score_shape_raw = cv2.matchShapes(
                 contorno_actual,
                 contorno_patron,
@@ -403,15 +397,12 @@ def comparar_patrones():
 
             score_shape = 1 / (1 + score_shape_raw)
 
-            # 🔥 score final
             score_final = (score_shape * 0.4) + (score_iou * 0.6)
 
             resultados.append((archivo, score_final))
 
-    # 🔄 ordenar
     resultados.sort(key=lambda x: x[1], reverse=True)
 
-    # 📊 mostrar en textbox
     ComparacionCaja.config(state="normal")
     ComparacionCaja.delete(1.0, tk.END)
 
@@ -450,7 +441,6 @@ def comparar_patrones():
 
         img_color = cv2.cvtColor(img_patron, cv2.COLOR_GRAY2RGB)
 
-        # 🔴 encontrar mejor contorno
         if contornos_patron:
             mejor_contorno = None
             mejor_score = float("inf")
@@ -509,7 +499,7 @@ LImagenPatron3 = tk.Label(ventana, bg="#1e1e2e")
 LImagenPatron3.place(x=955, y=490, width=311, height=200)
 
 
-# TEXTOS (DEBAJO)
+# TEXTOS
 LTextoPatron1 = tk.Label(ventana, bg="#1e1e1e", fg="white")
 LTextoPatron1.place(x=955, y=205, width=311, height=40)
 
