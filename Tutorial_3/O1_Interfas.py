@@ -27,6 +27,11 @@ img_mask_actual = None
 invertir_colores = False
 SerialPort1 = serial.Serial()
 warnings.filterwarnings("ignore", category=UserWarning)
+menu_visible = True
+
+resultados_match_shapes = []
+resultados_iou = []
+resultados_template = []
 
 ventana = tk.Tk()
 ventana.geometry("1280x720")
@@ -194,7 +199,7 @@ def soltar_mouse(event):
 
     imagen_para_comparar = ImgG
 
-    Coordenadas.config(text=f"{x1_img}.{y1_img} -- {x2_img}.{y2_img}", fg="white")
+    Coordenadas.config(text=f"x={x1_img}.y={y1_img} -- w={x2_img}.h={y2_img}", fg="white")
 
 
 def iniciar():
@@ -374,7 +379,6 @@ def comparar_con_template_matching(img_actual_gris, archivos):
 
         return result
 
-    # --- Imagen actual ---
     _, img_bin = cv2.threshold(img_actual_gris, 127, 255, cv2.THRESH_BINARY)
     img_edges = cv2.Canny(img_bin, 50, 150)
 
@@ -388,7 +392,6 @@ def comparar_con_template_matching(img_actual_gris, archivos):
         if plantilla is None:
             continue
 
-        # --- Plantilla ---
         _, plantilla_bin = cv2.threshold(plantilla, 127, 255, cv2.THRESH_BINARY)
         plantilla_edges = cv2.Canny(plantilla_bin, 50, 150)
 
@@ -495,20 +498,26 @@ def mostrar_mejores_imagenes(resultados_m, resultados_h, resultados_t):
 
 def comparar_patrones():
     global imagen_para_comparar
+    global resultados_match_shapes, resultados_iou, resultados_template
 
     if imagen_para_comparar is None:
+        print("No hay imagen para comparar")
         return
 
-    archivos = os.listdir(CARPETA_PATRONES)
+    archivos = [a for a in os.listdir(CARPETA_PATRONES) if a.endswith(".png")]
+
     if not archivos:
+        print("No hay patrones guardados")
         return
 
-    # Preparar imagen actual
     img_actual_np = np.array(imagen_para_comparar)
+
+    if len(img_actual_np.shape) == 3:
+        img_actual_np = cv2.cvtColor(img_actual_np, cv2.COLOR_RGB2GRAY)
+
     _, thresh_actual = cv2.threshold(img_actual_np, 127, 255, cv2.THRESH_BINARY)
     img_actual_bin = (thresh_actual == 255).astype(np.uint8)
 
-    # Aplicar inversion solo a la imagen recortada si el modo esta activado
     if invertir_colores:
         img_actual_bin = invertir_imagen_binaria(img_actual_bin)
 
@@ -517,21 +526,57 @@ def comparar_patrones():
 
     img_actual_gris = (img_actual_bin * 255).astype(np.uint8)
 
-    contornos_actual, _ = cv2.findContours((img_actual_bin * 255), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contornos_actual, _ = cv2.findContours(
+        img_actual_gris,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
     if not contornos_actual:
+        print("No se encontraron contornos")
         return
 
     contorno_actual = max(contornos_actual, key=cv2.contourArea)
 
-    # Filtrar solo archivos de imagen y mantener orden original
-    archivos_img = [a for a in archivos if a.endswith(".png")]
+    resultados_match_shapes = comparar_con_match_shapes(
+        img_actual_bin, contorno_actual, archivos
+    )
 
-    resultados_match_shapes = comparar_con_match_shapes(img_actual_bin, contorno_actual, archivos_img)
-    resultados_iou = comparar_con_iou(img_actual_bin, archivos_img)
-    resultados_template = comparar_con_template_matching(img_actual_gris, archivos_img)
+    resultados_iou = comparar_con_iou(
+        img_actual_bin, archivos
+    )
 
-    mostrar_resultados_en_cajas(resultados_match_shapes, resultados_iou, resultados_template)
-    mostrar_mejores_imagenes(resultados_match_shapes, resultados_iou, resultados_template)
+    resultados_template = comparar_con_template_matching(
+        img_actual_gris, archivos
+    )
+
+    resultados_match_shapes = sorted(resultados_match_shapes, key=lambda x: x[1])
+    resultados_iou = sorted(resultados_iou, key=lambda x: x[1], reverse=True)
+    resultados_template = sorted(resultados_template, key=lambda x: x[1], reverse=True)
+
+    if resultados_match_shapes:
+        nombre, valor = resultados_match_shapes[0]
+        LTextoPatron1.config(text=f"Match Shape: {nombre} | {valor*100:.1f}%")
+
+    if resultados_iou:
+        nombre, valor = resultados_iou[0]
+        LTextoPatron2.config(text=f"Momentos HU: {nombre} | {valor*100:.1f}%")
+
+    if resultados_template:
+        nombre, valor = resultados_template[0]
+        LTextoPatron3.config(text=f"Match Template: {nombre} | {valor*100:.1f}%")
+
+    mostrar_resultados_en_cajas(
+        resultados_match_shapes,
+        resultados_iou,
+        resultados_template
+    )
+
+    mostrar_mejores_imagenes(
+        resultados_match_shapes,
+        resultados_iou,
+        resultados_template
+    )
 
 
 def manchasG():
@@ -684,14 +729,91 @@ def click_enviar():
             data = SerialPort1.read_all()
             if data:
                 texto = data.decode(errors="ignore").strip()
-                TextRecibidos.insert(tk.END, texto + "\n" + "-"*40 + "\n")
+                TextRecibidos.insert(tk.END, texto + "\n" )
                 TextRecibidos.see(tk.END)
 
     except Exception as e:
         messagebox.showerror("Error", str(e))
 
 
-# UI Elements
+def mostrar_panel(panel_seleccionado):
+    # Comprobamos si el panel que apretamos ya está visible
+    esta_visible = panel_seleccionado.winfo_ismapped()
+
+    # 1. Ocultamos TODOS los frames para limpiar la pantalla
+    frame_metodos.place_forget()
+    frame_metodo.place_forget()
+
+    # 2. Si el panel NO estaba visible, lo mostramos en su posición
+    if not esta_visible:
+        panel_seleccionado.place(x=820, y=275, width=460, height=390)
+
+
+def ver_detalle_metodo(metodo):
+    global fotos_miniaturas
+    fotos_miniaturas = {}
+
+    # Mostrar frame
+    frame_metodos.place_forget()
+    frame_Imetodo.place_forget()
+    frame_metodo.place(x=820, y=275, width=460, height=390)
+
+    # Limpiar
+    for w in frame_metodo.winfo_children():
+        w.destroy()
+
+    # Scroll
+    canvas = tk.Canvas(frame_metodo, bg="#1e3e1e", highlightthickness=0)
+    scrollbar = tk.Scrollbar(frame_metodo, orient="vertical", command=canvas.yview)
+    contenedor = tk.Frame(canvas, bg="#1e3e1e")
+
+    contenedor.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas.create_window((0, 0), window=contenedor, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    # Elegir resultados y orden
+    datos = {
+        "shapes": (resultados_match_shapes, True),
+        "hu": (resultados_iou, True),
+        "template": (resultados_template, True)
+    }
+
+    if metodo not in datos:
+        return
+
+    resultados, invertir = datos[metodo]
+    resultados = sorted(resultados, key=lambda x: x[1], reverse=invertir)
+
+    # Mostrar
+    for nombre, valor in resultados:
+
+        fila = tk.Frame(contenedor, bg="#2e2e2e")
+        fila.pack(fill="x", padx=5, pady=4, ipady=10)
+
+        # Imagen
+        try:
+            img = Image.open(os.path.join(CARPETA_PATRONES, nombre)).convert("RGB")
+            img.thumbnail((80, 80))
+            foto = ImageTk.PhotoImage(img)
+            fotos_miniaturas[nombre] = foto
+
+            tk.Label(fila, image=foto, bg="#2e2e2e").pack(side="left", padx=5)
+        except:
+            tk.Label(fila, text="No Img", bg="#2e2e2e", fg="gray").pack(side="left", padx=5)
+
+        base = os.path.splitext(nombre)[0]
+        nombre_simple, tipo = base.rsplit("_", 1) if "_" in base else (base, "?")
+
+        texto_valor = f"{valor*100:.1f}%"
+
+        texto = f"{nombre_simple}\nTipo: {tipo}\n{texto_valor}"
+
+        tk.Label(fila, text=texto, bg="#2e2e2e", fg="white",
+                 font=("Arial", 10), justify="left", anchor="w").pack(side="left", padx=10)
+
 LImagenCamara = tk.Label(ventana, background="#1e1e2e", text="Camara")
 LImagenCamara.place(x=5, y=35, width=300, height=220)
 
@@ -706,32 +828,60 @@ LRecorteUmbralizado = tk.Label(ventana, background="#1e1e2e", text="Recorte")
 LRecorteUmbralizado.place(x=615, y=35, width=300, height=220)
 
 
-LTextoPatron1 = tk.Label(ventana, bg="#1e1e1e", fg="white", text="Mach Shape", font=("Arial", 9))
-LTextoPatron1.place(x=820, y=275, width=80, height=20)
-LImagenPatron1 = tk.Label(ventana, bg="#1e1e2e", text="Match Shapes")
-LImagenPatron1.place(x=820, y=300, width=150, height=100)
-ComparacionCajaM = tk.Text(ventana, state="disabled", wrap=tk.WORD, height=15, width=40, bg="#2e2e2e", fg="white")
-ComparacionCajaM.place(x=975, y=300, width=300, height=100)
+frame_metodos = tk.Frame(ventana, bg="#3e3e3e")
+frame_metodo = tk.Frame(ventana, bg="#1e3e1e")
+frame_Imetodo = tk.Frame(ventana, bg="#1e1e3e")
+
+LTextoPatron1 = tk.Label(frame_metodos, bg="#1e1e1e", fg="white", text="Mach Shape", font=("Arial", 9))
+LTextoPatron1.place(x=0, y=0, width=455, height=20)
+
+LImagenPatron1 = tk.Label(frame_metodos, bg="#1e1e2e", text="Match Shapes")
+LImagenPatron1.place(x=0, y=25, width=150, height=100)
+
+ComparacionCajaM = tk.Text(frame_metodos, state="disabled", wrap=tk.WORD, bg="#2e2e2e", fg="white")
+ComparacionCajaM.place(x=155, y=25, width=300, height=100)
+
+BSsh = tk.Button(frame_metodos, text="Ver",
+                 command=lambda: ver_detalle_metodo("shapes"))
+BSsh.place(x=0, y=95, width=35, height=35)
 
 
-LTextoPatron2 = tk.Label(ventana, bg="#1e1e1e", fg="white", text="Mometos Hu", font=("Arial", 9))
-LTextoPatron2.place(x=820, y=405, width=80, height=20)
-LImagenPatron2 = tk.Label(ventana, bg="#1e1e2e", text="Momentos HU")
-LImagenPatron2.place(x=820, y=430, width=150, height=100)
-ComparacionCajaH = tk.Text(ventana, state="disabled", wrap=tk.WORD, height=15, width=40, bg="#2e2e2e", fg="white")
-ComparacionCajaH.place(x=975, y=430, width=300, height=100)
+# --- Bloque Momentos Hu ---
+LTextoPatron2 = tk.Label(frame_metodos, bg="#1e1e1e", fg="white", text="Mometos Hu", font=("Arial", 9))
+LTextoPatron2.place(x=0, y=130, width=455, height=20)
 
+LImagenPatron2 = tk.Label(frame_metodos, bg="#1e1e2e", text="Momentos HU")
+LImagenPatron2.place(x=0, y=155, width=150, height=100)
 
-LTextoPatron3 = tk.Label(ventana, bg="#1e1e1e", fg="white", text="Match Template", font=("Arial", 9))
-LTextoPatron3.place(x=820, y=535, width=90, height=20)
-LImagenPatron3 = tk.Label(ventana, bg="#1e1e2e", text="Template Matching")
-LImagenPatron3.place(x=820, y=560, width=150, height=100)
-ComparacionCajaT = tk.Text(ventana, state="disabled", wrap=tk.WORD, height=15, width=40, bg="#2e2e2e", fg="white")
-ComparacionCajaT.place(x=975, y=560, width=300, height=100)
+ComparacionCajaH = tk.Text(frame_metodos, state="disabled", wrap=tk.WORD, bg="#2e2e2e", fg="white")
+ComparacionCajaH.place(x=155, y=155, width=300, height=100)
 
+BShu = tk.Button(frame_metodos, text="Ver",
+                 command=lambda: ver_detalle_metodo("hu"))
+BShu.place(x=0, y=225, width=35, height=35)
+
+# --- Bloque Match Template ---
+LTextoPatron3 = tk.Label(frame_metodos, bg="#1e1e1e", fg="white", text="Match Template", font=("Arial", 9))
+LTextoPatron3.place(x=0, y=260, width=455, height=20)
+
+LImagenPatron3 = tk.Label(frame_metodos, bg="#1e1e2e", text="Template Matching")
+LImagenPatron3.place(x=0, y=285, width=150, height=100)
+
+ComparacionCajaT = tk.Text(frame_metodos, state="disabled", wrap=tk.WORD, bg="#2e2e2e", fg="white")
+ComparacionCajaT.place(x=155, y=285, width=300, height=100)
+
+BSte = tk.Button(frame_metodos, text="Ver",
+                 command=lambda: ver_detalle_metodo("template"))
+BSte.place(x=0, y=355, width=35, height=35)
+
+Bmetodos = tk.Button(ventana, text="Ms", command=lambda: mostrar_panel(frame_metodos), bg="#2e2e2e", fg="white")
+Bmetodos.place(x=820, y=675, width=35, height=35)
+
+Bmetodo = tk.Button(ventana, text="Me", command=lambda: mostrar_panel(frame_metodo), bg="#2e2e2e", fg="white")
+Bmetodo.place(x=860, y=675, width=35, height=35)
 
 Coordenadas = tk.Label(ventana, text="", bg="#1e1e1e", fg="white")
-Coordenadas.place(x=725, y=235, width=90, height=25)
+Coordenadas.place(x=725, y=235, width=160, height=25)
 
 BCamara = tk.Button(ventana, text="On", command=iniciar_camara)
 BCamara.place(x=10, y=215, width=35, height=35)
