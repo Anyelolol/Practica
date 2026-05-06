@@ -597,13 +597,16 @@ def click_guardar():
         text = TextEnviar.get(1.0, tk.END)
         output_file.write(text)
 
-
 def leer_respuesta():
-    time.sleep(1)
-    data = SerialPort1.read_all()
-    if data:
-        TextRecibidos.insert(1.0, data.decode(errors="ignore"))
+    ventana.after(1000, _leer_y_mostrar)
 
+def _leer_y_mostrar():
+    if SerialPort1.is_open:
+        data = SerialPort1.read_all()
+        if data:
+            texto = data.decode(errors="ignore").strip()
+            TextRecibidos.insert(tk.END, texto + "\n")
+            TextRecibidos.see(tk.END)
 
 def click_pcplc():
     SerialPort1.write(b"Run pcplc\r")
@@ -631,38 +634,35 @@ def click_move():
 
 
 def click_open():
-    TextEnviar.insert(1.0, "open\n")
-
+    SerialPort1.write(b"open\r")
+    leer_respuesta()
 
 def click_close():
     SerialPort1.write(b"close\r")
     leer_respuesta()
 
 
-def click_conectar():
-    try:
-        if not SerialPort1.is_open:
+def toggle_conectar():
+    if not SerialPort1.is_open:
+        try:
             SerialPort1.port = CCOM.get()
             SerialPort1.baudrate = 9600
             SerialPort1.bytesize = serial.EIGHTBITS
             SerialPort1.parity = serial.PARITY_NONE
             SerialPort1.stopbits = serial.STOPBITS_ONE
             SerialPort1.timeout = 1
-
-            # MUY IMPORTANTE (igual que HyperTerminal)
             SerialPort1.xonxoff = False
             SerialPort1.rtscts = False
             SerialPort1.dsrdtr = False
-
             SerialPort1.open()
-
-            TextoEstado.config(text="Conectado")
-
-            messagebox.showinfo(message="Puerto Conectado")
-
-    except Exception as e:
-        messagebox.showerror("Error", str(e))
-
+            TextoEstado.config(text="CONECTADO")
+            BConectar.config(text="Desconectar", bg="#8B0000", fg="white")
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+    else:
+        SerialPort1.close()
+        TextoEstado.config(text="DESCONECTADO")
+        BConectar.config(text="Conectar", bg="#2e2e2e", fg="white")
 
 def click_desconectar():
     if SerialPort1.is_open:
@@ -679,19 +679,16 @@ def click_enviar():
         for x in lista:
             if x.strip() == "":
                 continue
-
             SerialPort1.write(x.encode() + b"\r")
             time.sleep(1 + int(CNUM.get()))
-
             data = SerialPort1.read_all()
             if data:
-                TextRecibidos.insert(1.0, data.decode(errors="ignore"))
-
-        messagebox.showinfo(message="Enviado Correctamente")
+                texto = data.decode(errors="ignore").strip()
+                TextRecibidos.insert(tk.END, texto + "\n" + "-"*40 + "\n")
+                TextRecibidos.see(tk.END)
 
     except Exception as e:
         messagebox.showerror("Error", str(e))
-
 
 
 # UI Elements
@@ -760,10 +757,10 @@ VariableTipo = tk.StringVar(value="Macho")
 RadioMacho = tk.Radiobutton(ventana, text="M", bg="#1e1e1e", fg="white", variable=VariableTipo, value="Macho")
 RadioHembra = tk.Radiobutton(ventana, text="F", bg="#1e1e1e", fg="white", variable=VariableTipo, value="Hembra")
 
-TextRecibidos = tk.Text(ventana, height=15, width=40, bg="#2e2e2e", fg="white")
+TextRecibidos = tk.Text(ventana, height=15, width=40, bg="#2e2e2e", fg="white", font=("Courier", 14))
 TextRecibidos.place(x=5, y=310, width=805, height=310)
 
-TextEnviar = tk.Text(ventana, fg="white", bg="#2e2e2e")
+TextEnviar = tk.Text(ventana, fg="white", bg="#2e2e2e", font=("Courier", 14))
 TextEnviar.place(x=5, y=625, width=615, height=35)
 
 BEnviar = tk.Button(ventana, text="Enviar", command=click_enviar)
@@ -775,7 +772,7 @@ BGuardarC.place(x=720, y=625, width=35, height=35)
 BAbort = tk.Button(ventana, text="Abort", command=click_a)
 BAbort.place(x=760, y=625, width=50, height=35)
 
-BConectar = tk.Button(ventana, text="Conectar", command=click_conectar)
+BConectar = tk.Button(ventana, text="Conectar", command=toggle_conectar, bg="#2e2e2e", fg="white")
 BConectar.place(x=5, y=270, width=90, height=35)
 
 TextoEstado = tk.Label(ventana, bg="#2e2e2e", fg="white")

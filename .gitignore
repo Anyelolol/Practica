@@ -11,9 +11,6 @@
 
 !Tutorial_3/
 !Tutorial_3/*.py
-!Tutorial_3/*.png
-!Tutorial_3/*.pdf
-!Tutorial_3/*.docx
 
 
 # Excepto .gitignore y README
