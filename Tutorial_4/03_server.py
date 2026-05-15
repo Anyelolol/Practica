@@ -12,18 +12,17 @@ PORT = 8888
 MAX_CONNECTIONS = 4
 RULE_NAME = "CamaraServer_Temp_8888"
 
-# Cada cliente: addr_str → { conn, slot, cam_id, num_conexion }
 clients = {}
 clients_lock = threading.Lock()
-conexion_counter = 0   # contador global de conexiones (1-based)
+conexion_counter = 0
 
 Server_Socket = None
 Servidor_Activo = False
 
-# addr_str que está en el slot 0 (pantalla grande)
 primary_addr = None
 
-# Dimensiones por slot
+arm_activo = False
+
 SLOT_DIMS = [(966, 540), (320, 180), (320, 180), (320, 180)]
 
 
@@ -64,6 +63,7 @@ def log(msg):
 def addr_key(addr):
     return f"{addr[0]}:{addr[1]}"
 
+
 def get_labels():
     return [LImagen, LImagen1, LImagen2, LImagen3]
 
@@ -73,7 +73,6 @@ def get_buttons():
 
 
 def assign_slot(ak):
-    """Asigna el primer slot libre. Slot 0 va al primero en conectarse."""
     global primary_addr
     used = {info["slot"] for info in clients.values()}
     if primary_addr is None:
@@ -86,14 +85,13 @@ def assign_slot(ak):
 
 
 def refresh_buttons():
-    """Actualiza texto y color de los 4 botones de cámara."""
     with clients_lock:
         slot_map = {info["slot"]: info for info in clients.values()}
     btns = get_buttons()
     for i, btn in enumerate(btns):
         if i in slot_map:
             info = slot_map[i]
-            label = f"C{info['num_conexion']}\nCam{info['cam_id']}"
+            label = f"Cam{info['cam_id']}"
             btn.config(text=label, bg="#27ae60",
                        font=("Arial", 7, "bold"), wraplength=35)
         else:
@@ -102,7 +100,6 @@ def refresh_buttons():
 
 
 def swap_to_primary(slot_index):
-    """Mueve la cámara del slot_index al slot 0, intercambiando con la primaria."""
     global primary_addr
     with clients_lock:
         target_key = None
@@ -113,7 +110,6 @@ def swap_to_primary(slot_index):
                 break
         if target_key is None or target_key == old_primary:
             return
-        # Intercambiar slots
         clients[target_key]["slot"] = 0
         if old_primary and old_primary in clients:
             clients[old_primary]["slot"] = slot_index
@@ -122,7 +118,6 @@ def swap_to_primary(slot_index):
 
 
 def resize_cover(frame_array, slot):
-    """Escala y recorta el frame para llenar el slot exacto."""
     fw, fh = SLOT_DIMS[slot]
     im = Image.fromarray(frame_array)
     iw, ih = im.size
@@ -130,12 +125,11 @@ def resize_cover(frame_array, slot):
     nw, nh = int(iw * scale), int(ih * scale)
     im = im.resize((nw, nh), Image.LANCZOS)
     left = (nw - fw) // 2
-    top = (nh - fh) // 2
+    top  = (nh - fh) // 2
     return im.crop((left, top, left + fw, top + fh))
 
 
 def render_frame(slot, pil_img, overlay_text):
-    """Actualiza el label del slot con la imagen y texto de enumeración."""
     labels = get_labels()
     lbl = labels[slot]
     photo = ImageTk.PhotoImage(image=pil_img)
@@ -144,6 +138,7 @@ def render_frame(slot, pil_img, overlay_text):
                   font=("Arial", 12, "bold"),
                   fg="white", bg="#000")
     lbl.image = photo
+
 
 def recibir_video(conn, addr):
     global conexion_counter, primary_addr
@@ -161,14 +156,13 @@ def recibir_video(conn, addr):
         }
 
     ventana.after(0, refresh_buttons)
-    log(f"- Conexión #{num} desde {addr} → slot {slot}")
+    log(f"- Conexión #{num} desde {addr} slot {slot}")
 
     buf = b""
     hdr_size = struct.calcsize("Q")
 
     while Servidor_Activo:
         try:
-            # Leer header
             while len(buf) < hdr_size:
                 chunk = conn.recv(4096)
                 if not chunk:
@@ -178,7 +172,6 @@ def recibir_video(conn, addr):
             msg_size = struct.unpack("Q", buf[:hdr_size])[0]
             buf = buf[hdr_size:]
 
-            # Leer payload
             while len(buf) < msg_size:
                 chunk = conn.recv(4096)
                 if not chunk:
@@ -188,29 +181,23 @@ def recibir_video(conn, addr):
             raw = buf[:msg_size]
             buf = buf[msg_size:]
 
-            # Deserializar — esperamos (cam_index, frame_array)
             payload = pickle.loads(raw)
             if isinstance(payload, tuple) and len(payload) == 2:
                 cam_id, frame = payload
             else:
-                # compatibilidad: solo frame
                 cam_id = "?"
                 frame = payload
 
-            # Actualizar cam_id en el registro
             with clients_lock:
                 if ak in clients:
                     clients[ak]["cam_id"] = str(cam_id)
                     current_slot = clients[ak]["slot"]
-                    current_num = clients[ak]["num_conexion"]
                 else:
                     break
 
             if 0 <= current_slot < 4:
                 im = resize_cover(frame, current_slot)
-                overlay = f""
-                ventana.after(0, render_frame, current_slot, im, overlay)
-                # Refrescar botones cuando tengamos cam_id real
+                ventana.after(0, render_frame, current_slot, im, "")
                 ventana.after(0, refresh_buttons)
 
         except Exception as e:
@@ -222,7 +209,6 @@ def recibir_video(conn, addr):
         clients.pop(ak, None)
         if primary_addr == ak:
             primary_addr = None
-            # Promover el cliente con slot más bajo al slot 0
             remaining = sorted(clients.items(), key=lambda x: x[1]["slot"])
             if remaining:
                 next_ak, next_info = remaining[0]
@@ -244,6 +230,7 @@ def recibir_video(conn, addr):
     except:
         pass
     log(f"- Conexión #{num} cerrada")
+
 
 def correr_servidor():
     global Server_Socket, Servidor_Activo
@@ -273,13 +260,8 @@ def correr_servidor():
     except Exception as e:
         log(f"- Error servidor: {e}")
 
-
-def enviar_mensaje_al_cliente(event=None):
-    texto = Entry_Mensaje.get().strip()
-    if not texto:
-        return
-    Entry_Mensaje.delete(0, tk.END)
-    encoded = f"< {texto}".encode("utf-8")
+def _broadcast(msg: str):
+    encoded = msg.encode("utf-8")
     with clients_lock:
         conns = [(ak, info["conn"]) for ak, info in clients.items()]
     for ak, conn in conns:
@@ -288,8 +270,72 @@ def enviar_mensaje_al_cliente(event=None):
         except:
             with clients_lock:
                 clients.pop(ak, None)
-    log(f"> {texto}")
 
+
+def enviar_mensaje_al_cliente(event=None):
+    texto = Entry_Mensaje.get().strip()
+    if not texto:
+        return
+
+    if arm_activo:
+        lower = texto.lower()
+        cmd = texto[4:].strip() if lower.startswith("arm:") else texto
+        if not cmd:
+            return
+        Entry_Mensaje.delete(0, tk.END)
+        Entry_Mensaje.insert(0, "ARM: ")
+        _broadcast(f"ARM:{cmd}")
+        log(f"ARM:{cmd}")
+    else:
+        # Modo normal: mensaje de chat
+        Entry_Mensaje.delete(0, tk.END)
+        _broadcast(f"< {texto}")
+        log(f"> {texto}")
+
+def toggle_arm():
+    global arm_activo
+    arm_activo = not arm_activo
+
+    if arm_activo:
+        ARM.config(bg="#e74c3c")
+        HOME.config(state=tk.NORMAL,  bg="#2980b9")
+        MOVE0.config(state=tk.NORMAL, bg="#8e44ad")
+        ABORT.config(state=tk.NORMAL, bg="#c0392b")
+        # Entry en rojo: todo lo que se escriba irá como ARM:
+        Entry_Mensaje.config(bg="#4a0000", fg="white",
+                             insertbackground="white")
+        Entry_Mensaje.delete(0, tk.END)
+        Entry_Mensaje.insert(0, "ARM: ")
+        _broadcast("ARM:ON")
+        log("- Modo ARM ACTIVADO  [el Entry envía ARM: automáticamente]")
+    else:
+        ARM.config(bg="#2e2e2e")
+        HOME.config(state=tk.DISABLED,  bg="#2e2e2e")
+        MOVE0.config(state=tk.DISABLED, bg="#2e2e2e")
+        ABORT.config(state=tk.DISABLED, bg="#2e2e2e")
+        # Entry vuelve a modo chat normal
+        Entry_Mensaje.config(bg="#1f1f1f", fg="white",
+                             insertbackground="white")
+        Entry_Mensaje.delete(0, tk.END)
+        _broadcast("ARM:OFF")
+        log("- Modo ARM DESACTIVADO")
+
+
+def cmd_home():
+    if arm_activo:
+        _broadcast("ARM:home")
+        log("> arm:home")
+
+
+def cmd_move0():
+    if arm_activo:
+        _broadcast("ARM:move 0")
+        log("> arm:move 0")
+
+def cmd_abort():
+    if arm_activo:
+        _broadcast("ARM:a")
+        log("> arm:a")
 
 def toggle_servidor():
     global Servidor_Activo, Server_Socket, primary_addr, conexion_counter
@@ -328,6 +374,15 @@ def toggle_servidor():
         EstadoLabel.config(text="Servidor detenido")
         log("- Servidor detenido")
 
+        # Apagar ARM si estaba activo
+        global arm_activo
+        if arm_activo:
+            arm_activo = False
+            ARM.config(bg="#2e2e2e")
+            HOME.config(state=tk.DISABLED,  bg="#2e2e2e")
+            MOVE0.config(state=tk.DISABLED, bg="#2e2e2e")
+            ABORT.config(state=tk.DISABLED, bg="#2e2e2e")
+
 
 def on_close():
     global Servidor_Activo
@@ -345,6 +400,7 @@ def on_close():
                 pass
     ventana.destroy()
 
+
 ventana = tk.Tk()
 ventana.title("Servidor - Vista de Camara")
 ventana.geometry("1366x768")
@@ -355,7 +411,6 @@ ventana.protocol("WM_DELETE_WINDOW", on_close)
 EstadoLabel = tk.Label(ventana, text="Servidor detenido",
                        font=("Arial", 14, "bold"), bg="black", fg="white")
 EstadoLabel.place(x=43, y=729, height=39)
-
 
 LImagen = tk.Label(ventana, background="#1e1e1e", anchor="center")
 LImagen.place(x=3, y=3, width=966, height=540)
@@ -391,7 +446,7 @@ Cam3.place(x=926, y=500, width=37, height=37)
 
 Log_Text = tk.Text(ventana, bg="black", font=("Arial", 14, "bold"),
                    fg="white", state="disabled")
-Log_Text.place(x=972, y=3, width=391, height=540)
+Log_Text.place(x=972, y=3, width=390, height=540)
 
 Start_Button = tk.Button(ventana, text="🔴", command=toggle_servidor,
                          bg="#2ecc71", fg="white", font=("Arial", 16, "bold"))
@@ -399,8 +454,36 @@ Start_Button.place(x=3, y=729, width=37, height=37)
 
 Entry_Mensaje = tk.Entry(ventana, font=("Arial", 14, "bold"),
                          bg="#1f1f1f", fg="white")
-Entry_Mensaje.place(x=972, y=546, width=391, height=45)
+Entry_Mensaje.place(x=972, y=546, width=390, height=45)
 Entry_Mensaje.bind("<Return>", enviar_mensaje_al_cliente)
+
+
+ARM = tk.Button(ventana, text="🦾", bg="#2e2e2e", fg="white",
+                font=("Arial", 45, "bold"),
+                command=toggle_arm)
+ARM.place(x=972, y=599, width=100, height=100)
+
+MANDO = tk.Button(ventana, text="🛸", bg="#2e2e2e", fg="white",
+                  font=("Arial", 45, "bold"))
+MANDO.place(x=1075, y=599, width=100, height=100)
+
+HOME = tk.Button(ventana, text="home", bg="#2e2e2e", fg="white",
+                 font=("Arial", 10, "bold"),
+                 state=tk.DISABLED,
+                 command=cmd_home)
+HOME.place(x=1178, y=599, width=50, height=50)
+
+MOVE0 = tk.Button(ventana, text="move0", bg="#2e2e2e", fg="white",
+                  font=("Arial", 10, "bold"),
+                  state=tk.DISABLED,
+                  command=cmd_move0)
+MOVE0.place(x=1178, y=649, width=50, height=50)
+
+ABORT = tk.Button(ventana, text="Abort", bg="#2e2e2e", fg="white",
+                  font=("Arial", 16, "bold"),
+                  state=tk.DISABLED,
+                  command=cmd_abort)
+ABORT.place(x=1231, y=599, width=132, height=100)
 
 if not is_admin():
     log("- No estas como Administrador")
