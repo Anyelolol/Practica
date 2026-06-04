@@ -7,6 +7,7 @@ from PIL import Image, ImageTk
 import subprocess
 import atexit
 from o4_audio import AudioPanel, make_audio_button
+from o4_yolo  import YoloPoseProcessor, make_yolo_button   # ← NUEVO
 
 HOST = ''
 PORT = 8888
@@ -25,6 +26,8 @@ primary_addr = None
 arm_activo = False
 
 SLOT_DIMS = [(966, 540), (320, 180), (320, 180), (320, 180)]
+
+yolo = YoloPoseProcessor()
 
 
 def is_admin():
@@ -197,6 +200,7 @@ def recibir_video(conn, addr):
                     break
 
             if 0 <= current_slot < 4:
+                frame = yolo.procesar(frame, es_bgr=True)
                 im = resize_cover(frame, current_slot)
                 ventana.after(0, render_frame, current_slot, im, "")
                 ventana.after(0, refresh_buttons)
@@ -412,7 +416,7 @@ audio_panel = AudioPanel(master=ventana, role="server")
 
 EstadoLabel = tk.Label(ventana, text="Servidor detenido",
                        font=("Arial", 14, "bold"), bg="black", fg="white")
-EstadoLabel.place(x=79, y=729, height=39)
+EstadoLabel.place(x=120, y=729, height=39)
 
 LImagen = tk.Label(ventana, background="#1e1e1e", anchor="center")
 LImagen.place(x=3, y=3, width=966, height=540)
@@ -455,6 +459,9 @@ Start_Button = tk.Button(ventana, text="🔴", command=toggle_servidor,
 Start_Button.place(x=3, y=729, width=37, height=37)
 
 make_audio_button(ventana, audio_panel, x=43, y=729, width=37, height=37)
+
+# ── Botón YOLO junto a los otros botones de la barra inferior ────────────────
+make_yolo_button(ventana, yolo, x=83, y=729, width=37, height=37)
 
 Entry_Mensaje = tk.Entry(ventana, font=("Arial", 14, "bold"),
                          bg="#1f1f1f", fg="white")
