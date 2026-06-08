@@ -6,10 +6,12 @@ import tkinter as tk
 from PIL import Image, ImageTk
 import subprocess
 import atexit
+import platform
+import os
 from o4_audio import AudioPanel, make_audio_button
-from o4_yolo  import YoloPoseProcessor, make_yolo_button   # ← NUEVO
+from o4_yolo  import YoloPoseProcessor
 
-HOST = ''
+HOST = 'localhost'
 PORT = 8888
 MAX_CONNECTIONS = 4
 RULE_NAME = "CamaraServer_Temp_8888"
@@ -20,41 +22,56 @@ conexion_counter = 0
 
 Server_Socket = None
 Servidor_Activo = False
-
 primary_addr = None
-
-arm_activo = False
-
-SLOT_DIMS = [(966, 540), (320, 180), (320, 180), (320, 180)]
+serial_activo = False
 
 yolo = YoloPoseProcessor()
+yolo._activo = True
+
 
 
 def is_admin():
-    try:
-        import ctypes
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
-        return False
+    if platform.system() == "Windows":
+        try:
+            import ctypes
+            return ctypes.windll.shell32.IsUserAnAdmin()
+        except:
+            return False
+    else:
+        return os.geteuid() == 0
 
 
 def open_port():
-    subprocess.run([
-        "netsh", "advfirewall", "firewall", "add", "rule",
-        f"name={RULE_NAME}", "dir=in", "action=allow",
-        "protocol=TCP", f"localport={PORT}", "profile=private,domain"
-    ], capture_output=True)
-    log(f"Puerto {PORT} abierto en firewall")
+    if platform.system() == "Windows":
+        subprocess.run([
+            "netsh", "advfirewall", "firewall", "add", "rule",
+            f"name={RULE_NAME}", "dir=in", "action=allow",
+            "protocol=TCP", f"localport={PORT}", "profile=private,domain"
+        ], capture_output=True)
+    else:
+        subprocess.run([
+            "pkexec", "firewall-cmd",
+            f"--add-port={PORT}/tcp", "--temporary"
+        ], capture_output=True)
+    log(f"- Puerto {PORT} abierto en firewall")
 
 
 def close_port():
-    subprocess.run([
-        "netsh", "advfirewall", "firewall", "delete", "rule",
-        f"name={RULE_NAME}"
-    ], capture_output=True)
+    if platform.system() == "Windows":
+        subprocess.run([
+            "netsh", "advfirewall", "firewall", "delete", "rule",
+            f"name={RULE_NAME}"
+        ], capture_output=True)
+    else:
+        subprocess.Popen(
+            ["pkexec", "firewall-cmd", f"--remove-port={PORT}/tcp"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
 
 
-atexit.register(close_port)
+if platform.system() == "Windows":
+    atexit.register(close_port)
+
 
 
 def log(msg):
@@ -72,8 +89,105 @@ def get_labels():
     return [LImagen, LImagen1, LImagen2, LImagen3]
 
 
-def get_buttons():
-    return [Cam, Cam1, Cam2, Cam3]
+def get_frames():
+    return [FImagen, FImagen1, FImagen2, FImagen3]
+
+
+
+PAD      = 3
+CW_RATIO = 0.30   # ancho columna derecha
+BS       = 45     # botones siempre 45x45
+BG       = 5
+
+_current_w = 0
+_current_h = 0
+
+
+def relayout(w, h, force=False):
+    global _current_w, _current_h
+    if not force and w == _current_w and h == _current_h:
+        return
+    _current_w, _current_h = w, h
+
+    cw  = int(w * CW_RATIO)        # ancho columna derecha
+    vw  = w - cw - PAD             # ancho zona video
+    cx  = w - cw                   # x inicio columna derecha
+
+    small_h = int(h * 0.26)
+    large_h = h - small_h - PAD * 3
+    large_w = vw - PAD * 2
+
+    small_w = (vw - PAD * 4) // 3
+    sy      = PAD + large_h + PAD
+
+    FImagen.place(x=PAD, y=PAD, width=large_w, height=large_h)
+    LImagen.place(x=0, y=0, width=large_w - 2, height=large_h - 2)
+
+    sx0 = PAD
+    sx1 = PAD + small_w + PAD
+    sx2 = PAD + (small_w + PAD) * 2
+
+    FImagen1.place(x=sx0, y=sy, width=small_w, height=small_h)
+    LImagen1.place(x=0, y=0, width=small_w - 2, height=small_h - 2)
+
+    FImagen2.place(x=sx1, y=sy, width=small_w, height=small_h)
+    LImagen2.place(x=0, y=0, width=small_w - 2, height=small_h - 2)
+
+    FImagen3.place(x=sx2, y=sy, width=small_w, height=small_h)
+    LImagen3.place(x=0, y=0, width=small_w - 2, height=small_h - 2)
+
+    cmd_rows  = 3                                  # 8 botones en 3 cols = 3 filas
+    cmd_bh    = 28
+    cmd_block = cmd_rows * (cmd_bh + BG)
+    bottom_h  = BS + PAD + cmd_block + 20 + 34 + PAD * 4
+    log_h     = max(60, h - bottom_h - PAD)
+
+    bw   = (cw - PAD - BG * 2) // 3
+    bh   = 28
+    rows = -(-len(CMD_BTNS) // 3)   # ceil div
+
+    cmd_y  = h - rows * (bh + BG) - PAD
+    by     = cmd_y - BS - BG
+    esty   = by - 20 - BG
+    ey     = esty - 34 - BG
+    log_h  = max(40, ey - PAD - BG)
+
+    Log_Text.place(x=cx, y=PAD, width=cw - PAD, height=log_h)
+    Entry_Mensaje.place(x=cx, y=ey, width=cw - PAD, height=34)
+    EstadoLabel.place(x=cx, y=esty, width=cw - PAD, height=20)
+
+    Start_Button.place(x=cx,              y=by, width=BS, height=BS)
+    Btn_Audio.place(x=cx + (BS + BG),     y=by, width=BS, height=BS)
+    SERIAL_BTN.place(x=cx + (BS + BG)*2,  y=by, width=BS, height=BS)
+    MANDO.place(x=cx + (BS + BG)*3,       y=by, width=BS, height=BS)
+    BTN_CONFIG.place(x=cx + (BS + BG)*4,   y=by, width=BS, height=BS)
+    BTN_TECLADO.place(x=cx + (BS + BG)*5,  y=by, width=BS, height=BS)
+
+    for i, btn in enumerate(CMD_BTNS):
+        if serial_activo:
+            col = i % 3
+            row = i // 3
+            bx  = cx + col * (bw + BG)
+            btn.place(x=bx, y=cmd_y + row * (bh + BG), width=bw, height=bh)
+        else:
+            btn.place_forget()
+
+    global SLOT_DIMS
+    SLOT_DIMS = [
+        (large_w, large_h),
+        (small_w, small_h),
+        (small_w, small_h),
+        (small_w, small_h),
+    ]
+
+
+def on_resize(event):
+    if event.widget is ventana:
+        relayout(event.width, event.height)
+
+
+
+SLOT_DIMS = [(820, 461), (268, 151), (268, 151), (268, 151)]
 
 
 def assign_slot(ak):
@@ -86,21 +200,6 @@ def assign_slot(ak):
         if s not in used:
             return s
     return -1
-
-
-def refresh_buttons():
-    with clients_lock:
-        slot_map = {info["slot"]: info for info in clients.values()}
-    btns = get_buttons()
-    for i, btn in enumerate(btns):
-        if i in slot_map:
-            info = slot_map[i]
-            label = f"Cam{info['cam_id']}"
-            btn.config(text=label, bg="#27ae60",
-                       font=("Arial", 7, "bold"), wraplength=35)
-        else:
-            btn.config(text=str(i + 1), bg="#2e2e2e",
-                       font=("Arial", 16, "bold"), wraplength=0)
 
 
 def swap_to_primary(slot_index):
@@ -118,7 +217,6 @@ def swap_to_primary(slot_index):
         if old_primary and old_primary in clients:
             clients[old_primary]["slot"] = slot_index
         primary_addr = target_key
-    ventana.after(0, refresh_buttons)
 
 
 def resize_cover(frame_array, slot):
@@ -133,15 +231,40 @@ def resize_cover(frame_array, slot):
     return im.crop((left, top, left + fw, top + fh))
 
 
-def render_frame(slot, pil_img, overlay_text):
+def set_slot_border(slot, color):
+    frames = get_frames()
+    if 0 <= slot < len(frames):
+        thickness = {"#e74c3c": 4, "#f39c12": 3, "#27ae60": 2}.get(color, 1)
+        frames[slot].config(highlightbackground=color, highlightthickness=thickness)
+
+
+def render_frame(slot, pil_img, color):
     labels = get_labels()
+    frames = get_frames()
     lbl = labels[slot]
+    frm = frames[slot]
+
+    # Calcular grosor del borde para ajustar el Label
+    thickness = 0
+    if color:
+        thickness = {"#e74c3c": 4, "#f39c12": 3, "#27ae60": 2}.get(color, 1)
+        frm.config(highlightbackground=color, highlightthickness=thickness)
+    else:
+        frm.config(highlightbackground="#1e1e1e", highlightthickness=1)
+        thickness = 1
+
+    # El Label debe quedar DENTRO del borde: dejar margen igual al grosor
+    m = thickness
+    fw = frm.winfo_width()
+    fh = frm.winfo_height()
+    lw = max(1, fw - m * 2)
+    lh = max(1, fh - m * 2)
+
     photo = ImageTk.PhotoImage(image=pil_img)
-    lbl.configure(image=photo, text=overlay_text,
-                  compound="center",
-                  font=("Arial", 12, "bold"),
-                  fg="white", bg="#000")
+    lbl.configure(image=photo, text="", compound="center", bg="#000")
     lbl.image = photo
+    lbl.place(x=m, y=m, width=lw, height=lh)
+
 
 
 def recibir_video(conn, addr):
@@ -152,14 +275,8 @@ def recibir_video(conn, addr):
         conexion_counter += 1
         num = conexion_counter
         slot = assign_slot(ak)
-        clients[ak] = {
-            "conn": conn,
-            "slot": slot,
-            "cam_id": "?",
-            "num_conexion": num,
-        }
+        clients[ak] = {"conn": conn, "slot": slot, "cam_id": "?", "num_conexion": num}
 
-    ventana.after(0, refresh_buttons)
     log(f"- Conexión #{num} desde {addr} slot {slot}")
 
     buf = b""
@@ -201,9 +318,9 @@ def recibir_video(conn, addr):
 
             if 0 <= current_slot < 4:
                 frame = yolo.procesar(frame, es_bgr=True)
+                color = yolo.last_color if yolo.activo else None
                 im = resize_cover(frame, current_slot)
-                ventana.after(0, render_frame, current_slot, im, "")
-                ventana.after(0, refresh_buttons)
+                ventana.after(0, render_frame, current_slot, im, color)
 
         except Exception as e:
             log(f"- Stream #{num} terminado ({addr}): {e}")
@@ -222,13 +339,15 @@ def recibir_video(conn, addr):
 
     def clear_slot(s):
         lbs = get_labels()
+        frs = get_frames()
         if 0 <= s < len(lbs):
             lbs[s].configure(image="", text="", bg="#1e1e1e")
             lbs[s].image = None
+        if 0 <= s < len(frs):
+            frs[s].config(highlightbackground="#1e1e1e", highlightthickness=1)
 
     if freed_slot >= 0:
         ventana.after(0, clear_slot, freed_slot)
-    ventana.after(0, refresh_buttons)
 
     try:
         conn.close()
@@ -257,13 +376,12 @@ def correr_servidor():
                         conn.close()
                         continue
                 log(f"- Cliente conectado: {addr}")
-                threading.Thread(
-                    target=recibir_video, args=(conn, addr), daemon=True
-                ).start()
+                threading.Thread(target=recibir_video, args=(conn, addr), daemon=True).start()
             except:
                 break
     except Exception as e:
         log(f"- Error servidor: {e}")
+
 
 
 def _broadcast(msg: str):
@@ -282,63 +400,31 @@ def enviar_mensaje_al_cliente(event=None):
     texto = Entry_Mensaje.get().strip()
     if not texto:
         return
+    Entry_Mensaje.delete(0, tk.END)
+    _broadcast(f"< {texto}")
+    log(f"> {texto}")
 
-    if arm_activo:
-        lower = texto.lower()
-        cmd = texto[4:].strip() if lower.startswith("arm:") else texto
-        if not cmd:
-            return
-        Entry_Mensaje.delete(0, tk.END)
-        Entry_Mensaje.insert(0, "ARM: ")
-        _broadcast(f"ARM:{cmd}")
-        log(f"ARM:{cmd}")
+
+
+def cmd_send(cmd: str):
+    _broadcast(f"SERIAL:{cmd}")
+    log(f"> {cmd.strip()}")
+
+
+
+def toggle_serial():
+    global serial_activo
+    serial_activo = not serial_activo
+    if serial_activo:
+        SERIAL_BTN.config(bg="#e74c3c")
+        _broadcast("SERIAL:ON")
+        log("- Serial ACTIVADO")
     else:
-        Entry_Mensaje.delete(0, tk.END)
-        _broadcast(f"< {texto}")
-        log(f"> {texto}")
+        SERIAL_BTN.config(bg="#2e2e2e")
+        _broadcast("SERIAL:OFF")
+        log("- Serial DESACTIVADO")
+    relayout(_current_w, _current_h, force=True)
 
-
-def toggle_arm():
-    global arm_activo
-    arm_activo = not arm_activo
-
-    if arm_activo:
-        ARM.config(bg="#e74c3c")
-        HOME.config(state=tk.NORMAL,  bg="#2980b9")
-        MOVE0.config(state=tk.NORMAL, bg="#8e44ad")
-        ABORT.config(state=tk.NORMAL, bg="#c0392b")
-        Entry_Mensaje.config(bg="#4a0000", fg="white", insertbackground="white")
-        Entry_Mensaje.delete(0, tk.END)
-        Entry_Mensaje.insert(0, "ARM: ")
-        _broadcast("ARM:ON")
-        log("- Modo ARM ACTIVADO")
-    else:
-        ARM.config(bg="#2e2e2e")
-        HOME.config(state=tk.DISABLED,  bg="#2e2e2e")
-        MOVE0.config(state=tk.DISABLED, bg="#2e2e2e")
-        ABORT.config(state=tk.DISABLED, bg="#2e2e2e")
-        Entry_Mensaje.config(bg="#1f1f1f", fg="white", insertbackground="white")
-        Entry_Mensaje.delete(0, tk.END)
-        _broadcast("ARM:OFF")
-        log("- Modo ARM DESACTIVADO")
-
-
-def cmd_home():
-    if arm_activo:
-        _broadcast("ARM:home")
-        log("> arm:home")
-
-
-def cmd_move0():
-    if arm_activo:
-        _broadcast("ARM:move 0")
-        log("> arm:move 0")
-
-
-def cmd_abort():
-    if arm_activo:
-        _broadcast("ARM:a")
-        log("> arm:a")
 
 
 def toggle_servidor():
@@ -347,7 +433,7 @@ def toggle_servidor():
     if not Servidor_Activo:
         Servidor_Activo = True
         conexion_counter = 0
-        if not is_admin():
+        if platform.system() == "Windows" and not is_admin():
             log("- No eres Administrador")
         else:
             open_port()
@@ -373,18 +459,16 @@ def toggle_servidor():
         for lbl in get_labels():
             lbl.configure(image="", text="", bg="#1e1e1e")
             lbl.image = None
-        refresh_buttons()
+        for frm in get_frames():
+            frm.config(highlightbackground="#1e1e1e", highlightthickness=1)
         Start_Button.config(text="🔴", bg="#2ecc71", font=("Arial", 16, "bold"))
         EstadoLabel.config(text="Servidor detenido")
         log("- Servidor detenido")
 
-        global arm_activo
-        if arm_activo:
-            arm_activo = False
-            ARM.config(bg="#2e2e2e")
-            HOME.config(state=tk.DISABLED,  bg="#2e2e2e")
-            MOVE0.config(state=tk.DISABLED, bg="#2e2e2e")
-            ABORT.config(state=tk.DISABLED, bg="#2e2e2e")
+        global serial_activo
+        if serial_activo:
+            serial_activo = False
+            SERIAL_BTN.config(bg="#2e2e2e")
 
 
 def on_close():
@@ -405,97 +489,88 @@ def on_close():
     ventana.destroy()
 
 
+
 ventana = tk.Tk()
 ventana.title("Servidor - Vista de Camara")
-ventana.geometry("1366x768")
-ventana.resizable(False, False)
+ventana.resizable(True, True)
+ventana.geometry("1280x720")
 ventana.config(bg="black")
 ventana.protocol("WM_DELETE_WINDOW", on_close)
+ventana.bind("<Escape>", lambda e: ventana.attributes("-fullscreen", False))
+ventana.bind("<F1>",     lambda e: ventana.attributes("-fullscreen", True))
+ventana.bind("<Configure>", on_resize)
 
 audio_panel = AudioPanel(master=ventana, role="server")
 
-EstadoLabel = tk.Label(ventana, text="Servidor detenido",
-                       font=("Arial", 14, "bold"), bg="black", fg="white")
-EstadoLabel.place(x=120, y=729, height=39)
 
-LImagen = tk.Label(ventana, background="#1e1e1e", anchor="center")
-LImagen.place(x=3, y=3, width=966, height=540)
+FImagen = tk.Frame(ventana, bg="#000", highlightbackground="#1e1e1e", highlightthickness=1)
+LImagen = tk.Label(FImagen, background="#1e1e1e", anchor="center")
+LImagen.place(x=0, y=0)
 
-LImagen1 = tk.Label(ventana, background="#1e1e1e", anchor="center")
-LImagen1.place(x=3, y=546, width=320, height=180)
+FImagen1 = tk.Frame(ventana, bg="#000", highlightbackground="#1e1e1e",
+                    highlightthickness=1, cursor="hand2")
+LImagen1 = tk.Label(FImagen1, background="#1e1e1e", anchor="center", cursor="hand2")
+LImagen1.place(x=0, y=0)
+FImagen1.bind("<Button-1>", lambda e: swap_to_primary(1))
+LImagen1.bind("<Button-1>", lambda e: swap_to_primary(1))
 
-LImagen2 = tk.Label(ventana, background="#1e1e1e", anchor="center")
-LImagen2.place(x=326, y=546, width=320, height=180)
+FImagen2 = tk.Frame(ventana, bg="#000", highlightbackground="#1e1e1e",
+                    highlightthickness=1, cursor="hand2")
+LImagen2 = tk.Label(FImagen2, background="#1e1e1e", anchor="center", cursor="hand2")
+LImagen2.place(x=0, y=0)
+FImagen2.bind("<Button-1>", lambda e: swap_to_primary(2))
+LImagen2.bind("<Button-1>", lambda e: swap_to_primary(2))
 
-LImagen3 = tk.Label(ventana, background="#1e1e1e", anchor="center")
-LImagen3.place(x=649, y=546, width=320, height=180)
+FImagen3 = tk.Frame(ventana, bg="#000", highlightbackground="#1e1e1e",
+                    highlightthickness=1, cursor="hand2")
+LImagen3 = tk.Label(FImagen3, background="#1e1e1e", anchor="center", cursor="hand2")
+LImagen3.place(x=0, y=0)
+FImagen3.bind("<Button-1>", lambda e: swap_to_primary(3))
+LImagen3.bind("<Button-1>", lambda e: swap_to_primary(3))
 
-Cam = tk.Button(ventana, text="1", bg="#2e2e2e", fg="white",
-                font=("Arial", 16, "bold"),
-                command=lambda: swap_to_primary(0))
-Cam.place(x=806, y=500, width=37, height=37)
+Log_Text = tk.Text(ventana, bg="black", font=("Consolas", 10),
+                   fg="#888888", state="disabled", relief="flat", bd=0)
 
-Cam1 = tk.Button(ventana, text="2", bg="#2e2e2e", fg="white",
-                 font=("Arial", 16, "bold"),
-                 command=lambda: swap_to_primary(1))
-Cam1.place(x=846, y=500, width=37, height=37)
-
-Cam2 = tk.Button(ventana, text="3", bg="#2e2e2e", fg="white",
-                 font=("Arial", 16, "bold"),
-                 command=lambda: swap_to_primary(2))
-Cam2.place(x=886, y=500, width=37, height=37)
-
-Cam3 = tk.Button(ventana, text="4", bg="#2e2e2e", fg="white",
-                 font=("Arial", 16, "bold"),
-                 command=lambda: swap_to_primary(3))
-Cam3.place(x=926, y=500, width=37, height=37)
-
-Log_Text = tk.Text(ventana, bg="black", font=("Arial", 14, "bold"),
-                   fg="white", state="disabled")
-Log_Text.place(x=972, y=3, width=390, height=540)
-
-Start_Button = tk.Button(ventana, text="🔴", command=toggle_servidor,
-                         bg="#2ecc71", fg="white", font=("Arial", 16, "bold"))
-Start_Button.place(x=3, y=729, width=37, height=37)
-
-make_audio_button(ventana, audio_panel, x=43, y=729, width=37, height=37)
-
-# ── Botón YOLO junto a los otros botones de la barra inferior ────────────────
-make_yolo_button(ventana, yolo, x=83, y=729, width=37, height=37)
-
-Entry_Mensaje = tk.Entry(ventana, font=("Arial", 14, "bold"),
-                         bg="#1f1f1f", fg="white")
-Entry_Mensaje.place(x=972, y=546, width=390, height=45)
+Entry_Mensaje = tk.Entry(ventana, font=("Consolas", 12),
+                          bg="#111111", fg="white", insertbackground="white",
+                          relief="flat", bd=4)
 Entry_Mensaje.bind("<Return>", enviar_mensaje_al_cliente)
 
-ARM = tk.Button(ventana, text="🦾", bg="#2e2e2e", fg="white",
-                font=("Arial", 45, "bold"),
-                command=toggle_arm)
-ARM.place(x=972, y=599, width=100, height=100)
+EstadoLabel = tk.Label(ventana, text="Servidor detenido",
+                       font=("Arial", 10), bg="black", fg="#888888")
+
+Start_Button = tk.Button(ventana, text="🔴", command=toggle_servidor,
+                          bg="#2ecc71", fg="white", font=("Arial", 16, "bold"),
+                          relief="flat", cursor="hand2")
+
+Btn_Audio = make_audio_button(ventana, audio_panel, x=0, y=0, width=BS, height=BS)
+
+SERIAL_BTN = tk.Button(ventana, text="🔌", bg="#2e2e2e", fg="white",
+                        font=("Arial", 16, "bold"), relief="flat",
+                        cursor="hand2", command=toggle_serial)
 
 MANDO = tk.Button(ventana, text="🛸", bg="#2e2e2e", fg="white",
-                  font=("Arial", 45, "bold"))
-MANDO.place(x=1075, y=599, width=100, height=100)
+                  font=("Arial", 16, "bold"), relief="flat", cursor="hand2")
 
-HOME = tk.Button(ventana, text="home", bg="#2e2e2e", fg="white",
-                 font=("Arial", 10, "bold"),
-                 state=tk.DISABLED,
-                 command=cmd_home)
-HOME.place(x=1178, y=599, width=50, height=50)
+BTN_CONFIG = tk.Button(ventana, text="⚙️", bg="#2e2e2e", fg="white",
+                       font=("Arial", 16, "bold"), relief="flat", cursor="hand2")
 
-MOVE0 = tk.Button(ventana, text="move0", bg="#2e2e2e", fg="white",
-                  font=("Arial", 10, "bold"),
-                  state=tk.DISABLED,
-                  command=cmd_move0)
-MOVE0.place(x=1178, y=649, width=50, height=50)
+BTN_TECLADO = tk.Button(ventana, text="⌨️", bg="#2e2e2e", fg="white",
+                        font=("Arial", 16, "bold"), relief="flat", cursor="hand2")
 
-ABORT = tk.Button(ventana, text="Abort", bg="#2e2e2e", fg="white",
-                  font=("Arial", 16, "bold"),
-                  state=tk.DISABLED,
-                  command=cmd_abort)
-ABORT.place(x=1231, y=599, width=132, height=100)
+CMD_BTNS = [
+    tk.Button(ventana, text="Abortar", bg="#922b21", fg="white",
+              font=("Consolas", 9, "bold"), relief="flat", cursor="hand2",
+              command=lambda: cmd_send("a\r")),
+    tk.Button(ventana, text="Move 0",  bg="#1a5276", fg="white",
+              font=("Consolas", 9, "bold"), relief="flat", cursor="hand2",
+              command=lambda: cmd_send("move 0\r")),
+    tk.Button(ventana, text="Home",    bg="#0b5345", fg="white",
+              font=("Consolas", 9, "bold"), relief="flat", cursor="hand2",
+              command=lambda: cmd_send("home\r")),
+]
 
-if not is_admin():
+if platform.system() == "Windows" and not is_admin():
     log("- No estas como Administrador")
 
 ventana.mainloop()

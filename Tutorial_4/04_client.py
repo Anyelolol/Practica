@@ -20,12 +20,37 @@ except Exception:
 
 PORT_DEFAULT = 8888
 MAX_CAMARAS = 4
-BACKEND = cv2.CAP_DSHOW
+import platform
+BACKEND = cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_V4L2
 
 
 def detectar_camaras() -> list:
     disponibles = []
-    for i in range(MAX_CAMARAS):
+    indices = []
+    if platform.system() == "Linux":
+        import glob, subprocess as sp
+        indices = []
+        for d in sorted(glob.glob("/dev/video*")):
+            try:
+                idx = int(d.replace("/dev/video", ""))
+            except:
+                continue
+            try:
+                out = sp.check_output(
+                    ["v4l2-ctl", "--device", d, "--info"],
+                    stderr=sp.DEVNULL, timeout=2
+                ).decode()
+                if "loopback" in out.lower() or "virtual" in out.lower():
+                    continue
+            except Exception:
+                pass
+            indices.append(idx)
+        if not indices:
+            indices = list(range(MAX_CAMARAS))
+    else:
+        indices = list(range(MAX_CAMARAS))
+
+    for i in indices:
         cap = cv2.VideoCapture(i, BACKEND)
         if cap.isOpened():
             ret, frame = cap.read()
@@ -90,14 +115,11 @@ class StreamCamara:
                 ret, frame = self.captura.read()
                 if not ret or frame is None:
                     continue
-
                 small = cv2.resize(frame, (426, 240))
                 rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-
                 im = Image.fromarray(rgb)
                 img = ImageTk.PhotoImage(image=im)
                 self.preview_label.after(0, self._set_preview, img)
-
                 data = pickle.dumps((self.cam_index, rgb))
                 header = struct.pack("Q", len(data))
                 self.sock.sendall(header + data)
@@ -116,10 +138,9 @@ class StreamCamara:
                 if not data:
                     break
                 msg = data.decode("utf-8").strip()
-
-                if msg.startswith("ARM:"):
-                    cmd = msg[4:]
-                    self.app.manejar_comando_arm(cmd)
+                if msg.startswith("SERIAL:"):
+                    cmd = msg[7:]
+                    self.app.manejar_serial(cmd)
                 else:
                     self.log(f"[Servidor] {msg}")
             except:
@@ -133,17 +154,17 @@ class StreamCamara:
 class ClienteCamara:
     def __init__(self, master: tk.Tk):
         self.master = master
-        self.master.title("Cliente - Emisor y Control Brazo")
-        self.master.geometry("1366x768")
+        self.master.title("Cliente - Emisor y Control")
+        self.master.geometry("1280x720")
         self.master.resizable(False, False)
-        self.master.config(bg="black")
+        self.master.config(bg="#0a0a0a")
         self.master.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.camaras: list = []
         self.streams: dict = {}
 
         self.serial_port = serial.Serial()
-        self._arm_cmd_ts: dict = {}
+        self._serial_cmd_ts: dict = {}
 
         self._build_ui()
 
@@ -152,99 +173,148 @@ class ClienteCamara:
             role="client",
             get_remote_ip=lambda: self.entry_ip.get().strip()
         )
-        make_audio_button(self.master, self.audio_panel, x=950, y=185, width=37, height=37)
+        make_audio_button(self.master, self.audio_panel,
+                          x=1060, y=390, width=180, height=30)
 
     def _build_ui(self):
-        bg_color = "black"
+        panel_bg = "#141414"
         fg_color = "white"
-        panel_bg = "#1e1e1e"
-        font_title = ("Arial", 14, "bold")
-        font_btn = ("Arial", 11, "bold")
+        font_title = ("Consolas", 12, "bold")
+        font_btn   = ("Consolas", 10, "bold")
+        font_small = ("Consolas", 9, "bold")
 
         self.preview_labels = []
-        coords = [(20, 20), (480, 20), (20, 290), (480, 290)]
+        coords = [(10, 10), (470, 10), (10, 280), (470, 280)]
         for i in range(MAX_CAMARAS):
             x, y = coords[i]
-            lbl = tk.Label(self.master, text=f"Cámara {i + 1} Inactiva",
-                           bg=panel_bg, fg="#555", font=font_title, anchor="center")
-            lbl.place(x=x, y=y, width=440, height=250)
+            lbl = tk.Label(self.master, text=f"Cam {i+1} Inactiva",
+                           bg=panel_bg, fg="#444", font=font_title, anchor="center")
+            lbl.place(x=x, y=y, width=450, height=258)
             self.preview_labels.append(lbl)
 
-        rx = 950
+        RX = 940
+        RW = 330
+        PAD = 6
 
-        tk.Label(self.master, text="Conexión Servidor", bg=bg_color, fg=fg_color, font=font_title).place(x=rx, y=20)
-        self.entry_ip = tk.Entry(self.master, font=("Arial", 12), width=15)
+        tk.Label(self.master, text="SERVIDOR", bg="#0a0a0a", fg="#555",
+                 font=("Consolas", 9, "bold")).place(x=RX, y=10)
+
+        frm_conn = tk.Frame(self.master, bg=panel_bg)
+        frm_conn.place(x=RX, y=28, width=RW, height=32)
+
+        self.entry_ip = tk.Entry(frm_conn, font=("Consolas", 11),
+                                  bg="#1a1a1a", fg=fg_color, insertbackground=fg_color,
+                                  relief="flat", bd=3, width=13)
         self.entry_ip.insert(0, "127.0.0.1")
-        self.entry_ip.place(x=rx, y=55)
+        self.entry_ip.pack(side="left", padx=(0, PAD))
 
-        self.entry_port = tk.Entry(self.master, font=("Arial", 12), width=7)
+        self.entry_port = tk.Entry(frm_conn, font=("Consolas", 11),
+                                    bg="#1a1a1a", fg=fg_color, insertbackground=fg_color,
+                                    relief="flat", bd=3, width=5)
         self.entry_port.insert(0, str(PORT_DEFAULT))
-        self.entry_port.place(x=rx + 160, y=55)
+        self.entry_port.pack(side="left")
 
-        self.btn_detectar = tk.Button(self.master, text="🔍 Detectar Cámaras", bg="#8e44ad", fg=fg_color, font=font_btn,
-                                      command=self.detectar_y_mostrar)
-        self.btn_detectar.place(x=rx, y=95, width=380, height=35)
+        self.btn_detectar = tk.Button(
+            self.master, text="🔍 Detectar Camaras", bg="#6c3483", fg=fg_color,
+            font=font_btn, relief="flat", cursor="hand2",
+            command=self.detectar_y_mostrar)
+        self.btn_detectar.place(x=RX, y=68, width=RW, height=30)
 
-        self.btn_conectar = tk.Button(self.master, text="▶ Conectar", bg="#2ecc71", fg=fg_color, font=font_btn,
-                                      state=tk.DISABLED, command=self.conectar_todo)
-        self.btn_conectar.place(x=rx, y=140, width=185, height=35)
+        self.btn_conectar = tk.Button(
+            self.master, text="▶ Conectar", bg="#1e8449", fg=fg_color,
+            font=font_btn, relief="flat", cursor="hand2",
+            state=tk.DISABLED, command=self.conectar_todo)
+        self.btn_conectar.place(x=RX, y=106, width=(RW - PAD) // 2, height=30)
 
-        self.btn_desconectar = tk.Button(self.master, text="⏹ Desconectar", bg="#e74c3c", fg=fg_color, font=font_btn,
-                                         state=tk.DISABLED, command=self.desconectar_todo)
-        self.btn_desconectar.place(x=rx + 195, y=140, width=185, height=35)
+        self.btn_desconectar = tk.Button(
+            self.master, text="⏹ Desconectar", bg="#922b21", fg=fg_color,
+            font=font_btn, relief="flat", cursor="hand2",
+            state=tk.DISABLED, command=self.desconectar_todo)
+        self.btn_desconectar.place(x=RX + (RW - PAD) // 2 + PAD, y=106,
+                                    width=(RW - PAD) // 2, height=30)
 
-        tk.Label(self.master, text="Conexión Brazo (Serial)", bg=bg_color, fg=fg_color, font=font_title).place(x=rx, y=210)
+        tk.Frame(self.master, bg="#222").place(x=RX, y=144, width=RW, height=1)
 
-        self.combo_com = ttk.Combobox(self.master, state="readonly", values=[f"COM{i}" for i in range(1, 21)],
-                                      font=("Arial", 12))
-        self.combo_com.set("COM5")
-        self.combo_com.place(x=rx, y=245, width=90)
+        tk.Label(self.master, text="SERIAL", bg="#0a0a0a", fg="#555",
+                 font=("Consolas", 9, "bold")).place(x=RX, y=152)
 
-        tk.Button(self.master, text="Conectar", bg="#2980b9", fg=fg_color, font=font_btn,
-                  command=self.conectar_serial).place(x=rx + 100, y=242, width=135, height=30)
-        tk.Button(self.master, text="Desconectar", bg="#e74c3c", fg=fg_color, font=font_btn,
-                  command=self.desconectar_serial).place(x=rx + 245, y=242, width=135, height=30)
+        frm_serial = tk.Frame(self.master, bg="#0a0a0a")
+        frm_serial.place(x=RX, y=170, width=RW, height=30)
 
-        self.lbl_serial_estado = tk.Label(self.master, text="⬤ DESCONECTADO", font=("Arial", 11, "bold"), bg=bg_color,
-                                          fg="#e74c3c")
-        self.lbl_serial_estado.place(x=rx, y=285)
+        if platform.system() == "Windows":
+            serial_ports = [f"COM{i}" for i in range(1, 21)]
+            serial_default = "COM5"
+        else:
+            import glob
+            serial_ports = sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*")) or ["/dev/ttyUSB0"]
+            serial_default = serial_ports[0]
 
-        tk.Label(self.master, text="Control Manual", bg=bg_color, fg=fg_color, font=font_title).place(x=rx, y=330)
+        self.combo_com = ttk.Combobox(frm_serial, state="readonly",
+                                       values=serial_ports,
+                                       font=("Consolas", 10), width=14)
+        self.combo_com.set(serial_default)
+        self.combo_com.pack(side="left", padx=(0, PAD))
 
+        tk.Button(frm_serial, text="Conectar", bg="#1a5276", fg=fg_color,
+                  font=font_small, relief="flat", cursor="hand2",
+                  command=self.conectar_serial).pack(side="left", padx=(0, PAD))
+        tk.Button(frm_serial, text="Desconectar", bg="#641e16", fg=fg_color,
+                  font=font_small, relief="flat", cursor="hand2",
+                  command=self.desconectar_serial).pack(side="left")
+
+        self.lbl_serial_estado = tk.Label(
+            self.master, text="⬤ DESCONECTADO",
+            font=("Consolas", 9, "bold"), bg="#0a0a0a", fg="#e74c3c")
+        self.lbl_serial_estado.place(x=RX, y=206, width=RW, height=18)
+
+        tk.Frame(self.master, bg="#222").place(x=RX, y=230, width=RW, height=1)
+
+        tk.Label(self.master, text="CONTROL MANUAL", bg="#0a0a0a", fg="#555",
+                 font=("Consolas", 9, "bold")).place(x=RX, y=238)
+
+        BW = (RW - PAD * 2) // 3
+        BH = 28
         comandos = [
-            ("Run pcplc", b"Run pcplc\r", rx, 365, "#16a085"),
-            ("Run ppnb", b"Run ppnb\r", rx + 130, 365, "#8e44ad"),
-            ("Abortar", b"a\r", rx + 260, 365, "#c0392b"),
-            ("Coff", b"coff\r", rx, 405, "#d35400"),
-            ("Move 0", b"move 0\r", rx + 130, 405, "#2471a3"),
-            ("Home", b"home\r", rx + 260, 405, "#117a65"),
-            ("Open", b"open\r", rx, 445, "#626567"),
-            ("Close", b"close\r", rx + 130, 445, "#1a252f")
+            ("Run pcplc", b"Run pcplc\r", 0, 0, "#0e6655"),
+            ("Run ppnb",  b"Run ppnb\r",  1, 0, "#6c3483"),
+            ("Abortar",   b"a\r",          2, 0, "#922b21"),
+            ("Coff",      b"coff\r",       0, 1, "#784212"),
+            ("Move 0",    b"move 0\r",     1, 1, "#1a5276"),
+            ("Home",      b"home\r",       2, 1, "#0b5345"),
+            ("Open",      b"open\r",       0, 2, "#424949"),
+            ("Close",     b"close\r",      1, 2, "#17202a"),
         ]
+        for texto, cmd_bytes, col, row, color in comandos:
+            bx = RX + col * (BW + PAD)
+            by = 258 + row * (BH + PAD)
+            tk.Button(self.master, text=texto, bg=color, fg=fg_color,
+                      font=font_small, relief="flat", cursor="hand2",
+                      command=lambda c=cmd_bytes: self._serial_send(c)
+                      ).place(x=bx, y=by, width=BW, height=BH)
 
-        for texto, cmd_bytes, bx, by, color in comandos:
-            tk.Button(self.master, text=texto, bg=color, fg=fg_color, font=("Arial", 9, "bold"),
-                      command=lambda c=cmd_bytes: self._serial_send(c)).place(x=bx, y=by, width=120, height=30)
+        tk.Frame(self.master, bg="#222").place(x=RX, y=362, width=RW, height=1)
 
-        self.log_text = tk.Text(self.master, bg=panel_bg, fg=fg_color, font=("Consolas", 10))
-        self.log_text.place(x=rx, y=500, width=380, height=240)
+        self.log_text = tk.Text(self.master, bg="#0d0d0d", fg="#777777",
+                                 font=("Consolas", 9), relief="flat", bd=0)
+        self.log_text.place(x=RX, y=430, width=RW, height=282)
+
         self.log("Sistema Iniciado.")
 
     def conectar_serial(self):
         try:
             if not self.serial_port.is_open:
-                self.serial_port.port = self.combo_com.get()
+                self.serial_port.port     = self.combo_com.get()
                 self.serial_port.baudrate = 9600
                 self.serial_port.bytesize = serial.EIGHTBITS
-                self.serial_port.parity = serial.PARITY_NONE
+                self.serial_port.parity   = serial.PARITY_NONE
                 self.serial_port.stopbits = serial.STOPBITS_ONE
-                self.serial_port.timeout = 1
-                self.serial_port.xonxoff = False
-                self.serial_port.rtscts = False
-                self.serial_port.dsrdtr = False
+                self.serial_port.timeout  = 1
+                self.serial_port.xonxoff  = False
+                self.serial_port.rtscts   = False
+                self.serial_port.dsrdtr   = False
                 self.serial_port.open()
                 self.lbl_serial_estado.config(text="⬤ CONECTADO", fg="#2ecc71")
-                self.log(f"Puerto Serial {self.serial_port.port} Conectado")
+                self.log(f"Serial {self.serial_port.port} conectado")
                 messagebox.showinfo(message="Puerto Conectado")
         except Exception as e:
             messagebox.showerror("Error Serial", str(e))
@@ -254,51 +324,52 @@ class ClienteCamara:
         if self.serial_port.is_open:
             self.serial_port.close()
             self.lbl_serial_estado.config(text="⬤ DESCONECTADO", fg="#e74c3c")
-            self.log("Puerto Serial Desconectado")
+            self.log("Serial desconectado")
             messagebox.showinfo(message="Puerto Desconectado")
 
     def _serial_send(self, cmd_bytes: bytes):
         if self.serial_port.is_open:
             try:
                 self.serial_port.write(cmd_bytes)
-                self.log(f"Serial -> {cmd_bytes.decode('utf-8', errors='ignore').strip()}")
+                self.log(f"Serial > {cmd_bytes.decode('utf-8', errors='ignore').strip()}")
             except Exception as e:
-                self.log(f"Error Enviando: {e}")
+                self.log(f"Error serial: {e}")
         else:
-            self.log(f"IGNORADO (Serial cerrado): {cmd_bytes}")
+            self.log(f"IGNORADO (serial cerrado): {cmd_bytes.decode('utf-8', errors='ignore').strip()}")
 
-    def manejar_comando_arm(self, cmd: str):
-        ahora = time.time()
-        if ahora - self._arm_cmd_ts.get(cmd, 0) < 0.3:
-            return
-        self._arm_cmd_ts[cmd] = ahora
-
+    def manejar_serial(self, cmd: str):
         if cmd == "ON":
-            self.log("[Modo ARM Activado en Servidor]")
+            self.log("[Servidor: serial ON]")
             return
         if cmd == "OFF":
-            self.log("[Modo ARM Desactivado en Servidor]")
+            self.log("[Servidor: serial OFF]")
             return
 
-        comando_bytes = cmd.encode("utf-8") + b"\r"
-        self._serial_send(comando_bytes)
+        ahora = time.time()
+        if ahora - self._serial_cmd_ts.get(cmd, 0) < 0.3:
+            return
+        self._serial_cmd_ts[cmd] = ahora
+        self._serial_send(cmd.encode("utf-8") + b"\r")
 
     def detectar_y_mostrar(self):
-        self.log("Buscando cámaras...")
+        self.log("Buscando camaras...")
         self.btn_detectar.config(state=tk.DISABLED, text="Buscando...")
         self.master.update()
-        threading.Thread(target=lambda: self.master.after(0, self._mostrar, detectar_camaras()), daemon=True).start()
+        threading.Thread(
+            target=lambda: self.master.after(0, self._mostrar, detectar_camaras()),
+            daemon=True
+        ).start()
 
     def _mostrar(self, encontradas: list):
         self.camaras = encontradas
-        self.btn_detectar.config(state=tk.NORMAL, text="🔍 Detectar Cámaras")
+        self.btn_detectar.config(state=tk.NORMAL, text="🔍 Detectar Camaras")
 
         for lbl in self.preview_labels:
-            lbl.config(image="", text="Inactiva", bg="#1e1e1e")
+            lbl.config(image="", text="Inactiva", bg="#141414")
             lbl.image = None
 
         if not encontradas:
-            self.log("No se detectaron cámaras.")
+            self.log("No se detectaron camaras.")
             self.btn_conectar.config(state=tk.DISABLED)
             return
 
@@ -307,12 +378,12 @@ class ClienteCamara:
 
         for i, idx in enumerate(encontradas):
             if i < len(self.preview_labels):
-                self.preview_labels[i].config(text=f"Cámara {idx} (Lista)")
+                self.preview_labels[i].config(text=f"Camara {idx} (Lista)")
 
     def conectar_todo(self):
         if not self.camaras:
             return
-        ip = self.entry_ip.get().strip()
+        ip   = self.entry_ip.get().strip()
         port = int(self.entry_port.get().strip())
 
         self.btn_conectar.config(state=tk.DISABLED)
@@ -334,7 +405,7 @@ class ClienteCamara:
             lbl.image = None
         self.btn_conectar.config(state=tk.NORMAL)
         self.btn_desconectar.config(state=tk.DISABLED)
-        self.log("Cámaras desconectadas.")
+        self.log("Camaras desconectadas.")
 
     def _on_error(self, idx):
         self.streams.pop(idx, None)

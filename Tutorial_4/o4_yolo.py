@@ -3,7 +3,6 @@ import tkinter as tk
 import numpy as np
 import cv2
 
-# YOLO se importa lazy para no romper el servidor si no está instalado
 _yolo_disponible = False
 try:
     from ultralytics import YOLO as _YOLO
@@ -11,42 +10,60 @@ try:
 except ImportError:
     pass
 
-FOCAL_LENGTH        = 600
-ALTURA_PERSONA_REAL = 1.70
+FOCAL_LENGTH        = 800   # calibrado empíricamente para webcams típicas
+ALTURA_PERSONA_REAL = 1.70  # metros
 MODEL_PATH          = "yolo11n-pose.pt"
+
+# Suavizado: cuántos frames consecutivos debe mantenerse un color antes de cambiar
+_COLOR_HOLD_FRAMES = 4
+
+
+def _color_distancia(dist):
+    if dist is None:
+        return None
+    if dist >= 4.0:
+        return "#27ae60"   # verde  : ≥ 4 m  (lejos, seguro)
+    if dist >= 2.0:
+        return "#f39c12"   # naranja: 2-4 m  (precaución)
+    return "#e74c3c"       # rojo   : < 2 m  (muy cerca)
+
+
+def _grosor_distancia(dist):
+    if dist is None:
+        return 1
+    if dist >= 4.0:
+        return 2
+    if dist >= 2.0:
+        return 3
+    return 5
 
 
 class YoloPoseProcessor:
-    """
-    Procesa frames numpy (BGR o RGB) con YOLO Pose.
-    Thread-safe: el modelo se carga en un hilo aparte para no bloquear la UI.
-    """
-
     def __init__(self):
         self._model   = None
-        self._activo  = False          # el usuario lo activa con toggle()
-        self._listo   = False          # True cuando el modelo ya cargó
+        self._activo  = True
+        self._listo   = False
         self._lock    = threading.Lock()
+        self._last_color: str | None = None
 
-        # Carga el modelo en background
+        # Suavizado anti-parpadeo: buffer de los últimos N colores crudos
+        self._color_history: list[str | None] = []
+        self._stable_color:  str | None = None
+
         threading.Thread(target=self._cargar_modelo, daemon=True).start()
-
-    # ── Carga ────────────────────────────────────────────────────────────────
 
     def _cargar_modelo(self):
         if not _yolo_disponible:
-            print("[YOLO] ultralytics no instalado — pip install ultralytics")
+            print("[YOLO] ultralytics no instalado")
             return
         try:
             model = _YOLO(MODEL_PATH)
             with self._lock:
                 self._model = model
                 self._listo = True
-            print("[YOLO] Modelo cargado ✓")
+            print("[YOLO] Modelo cargado")
         except Exception as e:
-            print(f"[YOLO] Error cargando modelo: {e}")
-
-    # ── API pública ───────────────────────────────────────────────────────────
+            print(f"[YOLO] Error: {e}")
 
     @property
     def activo(self):
@@ -56,40 +73,64 @@ class YoloPoseProcessor:
     def listo(self):
         return self._listo
 
+    @property
+    def last_color(self):
+        return self._last_color
+
     def toggle(self):
         self._activo = not self._activo
-        estado = "ACTIVADO" if self._activo else "DESACTIVADO"
-        print(f"[YOLO] {estado}")
+        if not self._activo:
+            self._last_color   = None
+            self._stable_color = None
+            self._color_history.clear()
         return self._activo
 
     def procesar(self, frame: np.ndarray, es_bgr: bool = True) -> np.ndarray:
-        """
-        Recibe un frame numpy (BGR por defecto) y devuelve el mismo frame
-        con las anotaciones YOLO dibujadas (mismo formato de entrada).
-        Si YOLO no está activo o el modelo no cargó, devuelve el frame sin cambios.
-        """
         if not self._activo or not self._listo:
+            self._last_color = None
             return frame
 
         with self._lock:
             model = self._model
-
         if model is None:
             return frame
 
-        # YOLO espera BGR
         bgr = frame if es_bgr else cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
         try:
             results = model(bgr, conf=0.5, verbose=False)
-            bgr = self._dibujar(bgr, results)
+            bgr, raw_color = self._analizar(bgr, results)
+            self._last_color = self._smooth_color(raw_color)
         except Exception as e:
-            print(f"[YOLO] Error en inferencia: {e}")
+            print(f"[YOLO] Error inferencia: {e}")
+            self._last_color = None
             return frame
 
         return bgr if es_bgr else cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
-    # ── Dibujo ────────────────────────────────────────────────────────────────
+    def _smooth_color(self, raw: str | None) -> str | None:
+        """Devuelve un color estable solo si el mismo color aparece en la mayoría
+        de los últimos _COLOR_HOLD_FRAMES frames. Evita el parpadeo."""
+        self._color_history.append(raw)
+        if len(self._color_history) > _COLOR_HOLD_FRAMES:
+            self._color_history.pop(0)
+
+        # Contar votos (ignorar None como "sin detección")
+        votes: dict[str, int] = {}
+        for c in self._color_history:
+            if c is not None:
+                votes[c] = votes.get(c, 0) + 1
+
+        if not votes:
+            self._stable_color = None
+            return None
+
+        # Ganador: color con más votos, solo si supera la mitad del buffer
+        winner = max(votes, key=lambda c: votes[c])
+        if votes[winner] >= max(2, _COLOR_HOLD_FRAMES // 2):
+            self._stable_color = winner
+
+        return self._stable_color
 
     def _estimar_distancia(self, altura_px):
         if altura_px == 0:
@@ -109,8 +150,8 @@ class YoloPoseProcessor:
         x1, y1, x2, y2 = bbox
         return abs(y2 - y1)
 
-    def _dibujar(self, frame, results):
-        personas = 0
+    def _analizar(self, frame, results):
+        min_dist = None
         for result in results:
             if result.boxes is None:
                 continue
@@ -119,54 +160,26 @@ class YoloPoseProcessor:
             kps_conf = result.keypoints.conf.cpu().numpy() if result.keypoints else None
 
             for i, bbox in enumerate(boxes):
-                personas += 1
-
                 kps = None
                 if kps_xy is not None and i < len(kps_xy):
                     kps = (np.column_stack([kps_xy[i], kps_conf[i]])
                            if kps_conf is not None else kps_xy[i])
 
                 dist = self._estimar_distancia(self._obtener_altura(kps, bbox))
-                x1, y1, x2, y2 = map(int, bbox)
+                if dist is not None:
+                    if min_dist is None or dist < min_dist:
+                        min_dist = dist
 
-                if dist is None:    color = (128, 128, 128)
-                elif dist < 1.5:    color = (0,   0,   255)
-                elif dist < 3.0:    color = (0,   165, 255)
-                elif dist < 5.0:    color = (0,   255, 255)
-                else:               color = (0,   255,   0)
+        color_hex = _color_distancia(min_dist)
+        return frame, color_hex
 
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-
-                txt = f"P{personas}: {dist}m" if dist else f"P{personas}"
-                (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                cv2.rectangle(frame, (x1, y1 - th - 10), (x1 + tw + 6, y1), color, -1)
-                cv2.putText(frame, txt, (x1 + 3, y1 - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-
-                if kps is not None:
-                    for idx in [0, 5, 6, 11, 12, 15, 16]:
-                        if idx < len(kps):
-                            kp = kps[idx]
-                            c  = kp[2] if len(kp) > 2 else 1.0
-                            if c > 0.5:
-                                cv2.circle(frame, (int(kp[0]), int(kp[1])), 5, color, -1)
-
-        return frame
-
-
-# ── Botón helper (igual que make_audio_button) ────────────────────────────────
 
 def make_yolo_button(parent: tk.Misc, processor: YoloPoseProcessor,
                      x: int, y: int,
                      width: int = 37, height: int = 37) -> tk.Button:
-    """Crea un botón toggle para activar/desactivar YOLO en la ventana dada."""
-
     def _toggle():
         activo = processor.toggle()
-        if activo:
-            btn.config(bg="#8e44ad", text="🤖")
-        else:
-            btn.config(bg="#2e2e2e", text="🤖")
+        btn.config(bg="#8e44ad" if activo else "#2e2e2e")
 
     btn = tk.Button(
         parent,
