@@ -214,17 +214,25 @@ class StreamCamara:
                 self.on_error(self.cam_index)
 
     def _recibir_msgs(self):
+        data_buffer = ""
         while self.activo:
             try:
                 data = self.sock.recv(1024)
                 if not data:
                     break
-                msg = data.decode("utf-8").strip()
-                if msg.startswith("SERIAL:"):
-                    cmd = msg[7:]
-                    self.app.manejar_serial(cmd)
-                else:
-                    self.log(f"[Servidor] {msg}")
+                data_buffer += data.decode("utf-8")
+
+                while "\n" in data_buffer:
+                    line, data_buffer = data_buffer.split("\n", 1)
+                    msg = line.strip()
+                    if not msg:
+                        continue
+
+                    if msg.startswith("SERIAL:"):
+                        cmd = msg[7:]
+                        self.app.manejar_serial(cmd, self.cam_index)
+                    else:
+                        self.log(f"[Servidor] {msg}")
             except:
                 break
 
@@ -423,19 +431,28 @@ class ClienteCamara:
         else:
             self.log(f"IGNORADO (serial cerrado): {cmd_bytes.decode('utf-8', errors='ignore').strip()}")
 
-    def manejar_serial(self, cmd: str):
+    def manejar_serial(self, cmd: str, cam_index: int):
+        with self._streams_lock:
+            if self.streams:
+                primer_idx = min(self.streams.keys())
+            else:
+                primer_idx = None
+
+        if cam_index != primer_idx:
+            return
+
         if cmd == "ON":
             self.log("[Servidor: serial ON]")
             return
         if cmd == "OFF":
             self.log("[Servidor: serial OFF]")
             return
-
+        cmd_limpio = cmd.strip()
         ahora = time.time()
-        if ahora - self._serial_cmd_ts.get(cmd, 0) < 0.3:
+        if ahora - self._serial_cmd_ts.get(cmd_limpio, 0) < 0.3:
             return
-        self._serial_cmd_ts[cmd] = ahora
-        self._serial_send(cmd.encode("utf-8") + b"\r")
+        self._serial_cmd_ts[cmd_limpio] = ahora
+        self._serial_send(cmd_limpio.encode("utf-8") + b"\r")
 
     def detectar_y_mostrar(self):
         self.log("Buscando camaras...")

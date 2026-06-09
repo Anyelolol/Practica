@@ -272,9 +272,7 @@ def render_frame(slot, pil_img, color):
     lbl.place(x=m, y=m, width=lw, height=lh)
 
 
-# ── TRABAJADOR ASÍNCRONO: DISEÑADO PARA DESCARTAR FRAMES VIEJOS ──
 def procesar_cliente(ak, num):
-    """ Hilo independiente por cámara que procesa solo el frame más nuevo """
     while Servidor_Activo:
         jpg_data = None
         current_slot = -1
@@ -282,14 +280,13 @@ def procesar_cliente(ak, num):
         with clients_lock:
             if ak not in clients:
                 break
-            # Obtenemos el último frame depositado por el hilo de red
             if "latest_jpeg" in clients[ak] and clients[ak]["latest_jpeg"] is not None:
                 jpg_data = clients[ak]["latest_jpeg"]
                 clients[ak]["latest_jpeg"] = None  # Marcamos como consumido
                 current_slot = clients[ak]["slot"]
 
         if jpg_data is None:
-            time.sleep(0.005)  # Evita el consumo innecesario de CPU si no hay datos nuevos
+            time.sleep(0.005)
             continue
 
         try:
@@ -302,14 +299,11 @@ def procesar_cliente(ak, num):
                     if bgr_frame is None:
                         continue
 
-                # Procesamiento de Inteligencia Artificial (YOLO)
                 bgr_frame = yolo.procesar(bgr_frame, es_bgr=True)
                 color = yolo.last_color if yolo.activo else None
 
-                # Escalado optimizado de alta velocidad
                 im = resize_cover(bgr_frame, current_slot)
 
-                # Envío controlado y sincronizado a la interfaz gráfica (Tkinter)
                 if not _pending_render[current_slot]:
                     _pending_render[current_slot] = True
 
@@ -343,7 +337,6 @@ def recibir_video(conn, addr):
 
     log(f"- Conexión #{num} desde {addr} slot {slot}")
 
-    # Lanzamos el hilo de procesamiento paralelo inmediatamente para este cliente
     threading.Thread(target=procesar_cliente, args=(ak, num), daemon=True).start()
 
     buf = b""
@@ -376,8 +369,6 @@ def recibir_video(conn, addr):
                 cam_id = "?"
                 frame = payload
 
-            # Guardamos el frame recibido instantáneamente en memoria.
-            # El bucle de red jamás se detiene a esperar a YOLO ni al renderizado.
             with clients_lock:
                 if ak in clients:
                     clients[ak]["cam_id"] = str(cam_id)
@@ -447,6 +438,9 @@ def correr_servidor():
 
 
 def _broadcast(msg: str):
+    if not msg.endswith("\n"):
+        msg += "\n"
+
     encoded = msg.encode("utf-8")
     with clients_lock:
         conns = [(ak, info["conn"]) for ak, info in clients.items()]
@@ -463,14 +457,13 @@ def enviar_mensaje_al_cliente(event=None):
     if not texto:
         return
     Entry_Mensaje.delete(0, tk.END)
-    _broadcast(f"< {texto}")
+    _broadcast(f"< {texto}\n")
     log(f"> {texto}")
 
 
 def cmd_send(cmd: str):
-    _broadcast(f"SERIAL:{cmd}")
+    _broadcast(f"SERIAL:{cmd}\n")
     log(f"> {cmd.strip()}")
-
 
 def toggle_serial():
     global serial_activo
