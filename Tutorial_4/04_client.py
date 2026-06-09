@@ -369,14 +369,14 @@ class ClienteCamara:
         BW = (RW - PAD * 2) // 3
         BH = 28
         comandos = [
-            ("Run pcplc", b"Run pcplc\r", 0, 0, "#0e6655"),
-            ("Run ppnb",  b"Run ppnb\r",  1, 0, "#6c3483"),
-            ("Abortar",   b"a\r",          2, 0, "#922b21"),
-            ("Coff",      b"coff\r",       0, 1, "#784212"),
-            ("Move 0",    b"move 0\r",     1, 1, "#1a5276"),
-            ("Home",      b"home\r",       2, 1, "#0b5345"),
-            ("Open",      b"open\r",       0, 2, "#424949"),
-            ("Close",     b"close\r",      1, 2, "#17202a"),
+            ("Run pcplc", b"Run pcplc\r\n", 0, 0, "#0e6655"),
+            ("Run ppnb",  b"Run ppnb\r\n",  1, 0, "#6c3483"),
+            ("Abortar",   b"a\r\n",          2, 0, "#922b21"),
+            ("Coff",      b"coff\r\n",       0, 1, "#784212"),
+            ("Move 0",    b"move 0\r\n",     1, 1, "#1a5276"),
+            ("Home",      b"home\r\n",       2, 1, "#0b5345"),
+            ("Open",      b"open\r\n",       0, 2, "#424949"),
+            ("Close",     b"close\r\n",      1, 2, "#17202a"),
         ]
         for texto, cmd_bytes, col, row, color in comandos:
             bx = RX + col * (BW + PAD)
@@ -425,6 +425,8 @@ class ClienteCamara:
         if self.serial_port.is_open:
             try:
                 self.serial_port.write(cmd_bytes)
+                self.serial_port.flush()
+                print("ENVIADO RAW:", repr(cmd_bytes))
                 self.log(f"Serial > {cmd_bytes.decode('utf-8', errors='ignore').strip()}")
             except Exception as e:
                 self.log(f"Error serial: {e}")
@@ -452,7 +454,7 @@ class ClienteCamara:
         if ahora - self._serial_cmd_ts.get(cmd_limpio, 0) < 0.3:
             return
         self._serial_cmd_ts[cmd_limpio] = ahora
-        self._serial_send(cmd_limpio.encode("utf-8") + b"\r")
+        self._serial_send(cmd_limpio.encode("utf-8") + b"\r\n")
 
     def detectar_y_mostrar(self):
         self.log("Buscando camaras...")

@@ -462,8 +462,9 @@ def enviar_mensaje_al_cliente(event=None):
 
 
 def cmd_send(cmd: str):
-    _broadcast(f"SERIAL:{cmd}\n")
-    log(f"> {cmd.strip()}")
+    cmd_limpio = cmd.strip()
+    _broadcast(f"SERIAL:{cmd_limpio}\n")
+    log(f"> {cmd_limpio}")
 
 def toggle_serial():
     global serial_activo
@@ -611,13 +612,13 @@ BTN_TECLADO = tk.Button(ventana, text="⌨️", bg="#2e2e2e", fg="white",
 CMD_BTNS = [
     tk.Button(ventana, text="Abortar", bg="#922b21", fg="white",
               font=("Consolas", 9, "bold"), relief="flat", cursor="hand2",
-              command=lambda: cmd_send("a\r")),
+              command=lambda: cmd_send("a")),
     tk.Button(ventana, text="Move 0", bg="#1a5276", fg="white",
               font=("Consolas", 9, "bold"), relief="flat", cursor="hand2",
-              command=lambda: cmd_send("move 0\r")),
+              command=lambda: cmd_send("move 0")),
     tk.Button(ventana, text="Home", bg="#0b5345", fg="white",
               font=("Consolas", 9, "bold"), relief="flat", cursor="hand2",
-              command=lambda: cmd_send("home\r")),
+              command=lambda: cmd_send("home")),
 ]
 
 if platform.system() == "Windows" and not is_admin():
