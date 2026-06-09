@@ -2,6 +2,7 @@ import socket
 import struct
 import pickle
 import threading
+import queue
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -22,6 +23,11 @@ PORT_DEFAULT = 8888
 MAX_CAMARAS = 4
 import platform
 BACKEND = cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_V4L2
+
+# ── Límite de FPS para no saturar red ni CPU ──────────────────────────────────
+TARGET_FPS   = 15
+FRAME_DELAY  = 1.0 / TARGET_FPS
+JPEG_QUALITY = 70          # 0-100; 70 da buena calidad con ~20-50 KB/frame
 
 
 def detectar_camaras() -> list:
@@ -94,9 +100,13 @@ class StreamCamara:
             self.on_error(self.cam_index)
             return False
 
+        # Cola de tamaño 1: si el envío va lento, captura descarta el frame viejo
+        self._frame_queue = queue.Queue(maxsize=1)
+
         self.activo = True
-        threading.Thread(target=self._transmitir, daemon=True).start()
-        threading.Thread(target=self._recibir_msgs, daemon=True).start()
+        threading.Thread(target=self._capturar,     daemon=True).start()
+        threading.Thread(target=self._enviar,        daemon=True).start()
+        threading.Thread(target=self._recibir_msgs,  daemon=True).start()
         self.log(f"[Cam {self.cam_index}] Transmitiendo a {self.ip}:{self.port}")
         return True
 
@@ -112,26 +122,96 @@ class StreamCamara:
                 pass
             self.sock = None
 
-    def _transmitir(self):
+    def _capturar(self):
+        """
+        Hilo A — solo lee frames de la cámara y los pone en la cola.
+        Si la cola está llena (el envío va lento), reemplaza el frame
+        viejo por el nuevo para enviar siempre el más reciente.
+        También actualiza el preview local sin bloquear.
+        """
+        _preview_pending = False
+
         try:
             while self.activo:
+                t0 = time.time()
+
                 ret, frame = self.captura.read()
                 if not ret or frame is None:
                     continue
+
                 small = cv2.resize(frame, (426, 240))
-                rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-                # Mandar numpy array — PhotoImage se crea en main thread
-                self.preview_label.after(0, self._set_preview, rgb.copy())
-                data = pickle.dumps((self.cam_index, rgb))
-                header = struct.pack("Q", len(data))
-                self.sock.sendall(header + data)
+
+                # Preview local throttleado
+                if not _preview_pending:
+                    rgb_prev = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+
+                    def do_preview(arr=rgb_prev):
+                        nonlocal _preview_pending
+                        self._set_preview(arr)
+                        _preview_pending = False
+
+                    _preview_pending = True
+                    self.preview_label.after(0, do_preview)
+
+                # Comprimir antes de encolar (trabajo pesado fuera del hilo de envío)
+                ok, jpg_buf = cv2.imencode(
+                    '.jpg', small,
+                    [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+                )
+                if not ok:
+                    continue
+
+                # put_nowait + except descarta el frame viejo si la cola está llena
+                try:
+                    self._frame_queue.put_nowait(jpg_buf)
+                except queue.Full:
+                    try:
+                        self._frame_queue.get_nowait()   # descarta el viejo
+                    except queue.Empty:
+                        pass
+                    self._frame_queue.put_nowait(jpg_buf)
+
+                # Throttle de captura a TARGET_FPS
+                elapsed = time.time() - t0
+                if elapsed < FRAME_DELAY:
+                    time.sleep(FRAME_DELAY - elapsed)
+
         except Exception as e:
             if self.activo:
-                self.log(f"[Cam {self.cam_index}] Detenida: {e}")
-                self.on_error(self.cam_index)
+                self.log(f"[Cam {self.cam_index}] Error captura: {e}")
         finally:
             if self.captura:
                 self.captura.release()
+            # Señal de parada para _enviar
+            try:
+                self._frame_queue.put_nowait(None)
+            except queue.Full:
+                pass
+
+    def _enviar(self):
+        """
+        Hilo B — solo saca frames de la cola y los manda por el socket.
+        Si el socket va lento, _capturar ya se encargó de descartar frames
+        viejos, así que este hilo nunca se acumula.
+        """
+        try:
+            while self.activo:
+                try:
+                    jpg_buf = self._frame_queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+
+                if jpg_buf is None:   # señal de parada de _capturar
+                    break
+
+                data   = pickle.dumps((self.cam_index, jpg_buf))
+                header = struct.pack("Q", len(data))
+                self.sock.sendall(header + data)
+
+        except Exception as e:
+            if self.activo:
+                self.log(f"[Cam {self.cam_index}] Error envío: {e}")
+                self.on_error(self.cam_index)
 
     def _recibir_msgs(self):
         while self.activo:
