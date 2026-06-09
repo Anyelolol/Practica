@@ -170,6 +170,7 @@ class ClienteCamara:
 
         self.serial_port = serial.Serial()
         self._serial_cmd_ts: dict = {}
+        self._streams_lock = threading.Lock()
 
         self._build_ui()
 
@@ -394,16 +395,22 @@ class ClienteCamara:
         self.btn_conectar.config(state=tk.DISABLED)
         self.btn_desconectar.config(state=tk.NORMAL)
 
-        for i, idx in enumerate(self.camaras[:MAX_CAMARAS]):
+        def _conectar_cam(i, idx):
+            time.sleep(i * 0.3)  # escalonar para evitar race en VideoCapture
             lbl = self.preview_labels[i]
             s = StreamCamara(idx, ip, port, lbl, self.log, self._on_error, self)
             if s.iniciar():
-                self.streams[idx] = s
+                with self._streams_lock:
+                    self.streams[idx] = s
+
+        for i, idx in enumerate(self.camaras[:MAX_CAMARAS]):
+            threading.Thread(target=_conectar_cam, args=(i, idx), daemon=True).start()
 
     def desconectar_todo(self):
-        for s in self.streams.values():
-            s.detener()
-        self.streams.clear()
+        with self._streams_lock:
+            for s in self.streams.values():
+                s.detener()
+            self.streams.clear()
         for i, lbl in enumerate(self.preview_labels):
             lbl.config(image="", text=f"Inactiva")
             lbl.image = None
@@ -412,8 +419,10 @@ class ClienteCamara:
         self.log("Camaras desconectadas.")
 
     def _on_error(self, idx):
-        self.streams.pop(idx, None)
-        if not self.streams:
+        with self._streams_lock:
+            self.streams.pop(idx, None)
+            empty = not self.streams
+        if empty:
             self.master.after(0, lambda: self.btn_conectar.config(state=tk.NORMAL))
             self.master.after(0, lambda: self.btn_desconectar.config(state=tk.DISABLED))
 

@@ -271,7 +271,7 @@ def recibir_video(conn, addr):
     while Servidor_Activo:
         try:
             while len(buf) < hdr_size:
-                chunk = conn.recv(4096)
+                chunk = conn.recv(65536)
                 if not chunk:
                     raise ConnectionResetError
                 buf += chunk
@@ -280,7 +280,7 @@ def recibir_video(conn, addr):
             buf = buf[hdr_size:]
 
             while len(buf) < msg_size:
-                chunk = conn.recv(4096)
+                chunk = conn.recv(65536)
                 if not chunk:
                     raise ConnectionResetError
                 buf += chunk
