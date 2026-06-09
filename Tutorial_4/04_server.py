@@ -11,7 +11,7 @@ import os
 from o4_audio import AudioPanel, make_audio_button
 from o4_yolo  import YoloPoseProcessor
 
-HOST = 'localhost'
+HOST = ''
 PORT = 8888
 MAX_CONNECTIONS = 4
 RULE_NAME = "CamaraServer_Temp_8888"
@@ -27,7 +27,6 @@ serial_activo = False
 
 yolo = YoloPoseProcessor()
 yolo._activo = True
-
 
 
 def is_admin():
@@ -73,7 +72,6 @@ if platform.system() == "Windows":
     atexit.register(close_port)
 
 
-
 def log(msg):
     Log_Text.config(state="normal")
     Log_Text.insert("end", msg + "\n")
@@ -93,10 +91,9 @@ def get_frames():
     return [FImagen, FImagen1, FImagen2, FImagen3]
 
 
-
 PAD      = 3
-CW_RATIO = 0.30   # ancho columna derecha
-BS       = 45     # botones siempre 45x45
+CW_RATIO = 0.30
+BS       = 45
 BG       = 5
 
 _current_w = 0
@@ -109,9 +106,9 @@ def relayout(w, h, force=False):
         return
     _current_w, _current_h = w, h
 
-    cw  = int(w * CW_RATIO)        # ancho columna derecha
-    vw  = w - cw - PAD             # ancho zona video
-    cx  = w - cw                   # x inicio columna derecha
+    cw  = int(w * CW_RATIO)
+    vw  = w - cw - PAD
+    cx  = w - cw
 
     small_h = int(h * 0.26)
     large_h = h - small_h - PAD * 3
@@ -136,7 +133,7 @@ def relayout(w, h, force=False):
     FImagen3.place(x=sx2, y=sy, width=small_w, height=small_h)
     LImagen3.place(x=0, y=0, width=small_w - 2, height=small_h - 2)
 
-    cmd_rows  = 3                                  # 8 botones en 3 cols = 3 filas
+    cmd_rows  = 3
     cmd_bh    = 28
     cmd_block = cmd_rows * (cmd_bh + BG)
     bottom_h  = BS + PAD + cmd_block + 20 + 34 + PAD * 4
@@ -144,7 +141,7 @@ def relayout(w, h, force=False):
 
     bw   = (cw - PAD - BG * 2) // 3
     bh   = 28
-    rows = -(-len(CMD_BTNS) // 3)   # ceil div
+    rows = -(-len(CMD_BTNS) // 3)
 
     cmd_y  = h - rows * (bh + BG) - PAD
     by     = cmd_y - BS - BG
@@ -184,7 +181,6 @@ def relayout(w, h, force=False):
 def on_resize(event):
     if event.widget is ventana:
         relayout(event.width, event.height)
-
 
 
 SLOT_DIMS = [(820, 461), (268, 151), (268, 151), (268, 151)]
@@ -231,20 +227,12 @@ def resize_cover(frame_array, slot):
     return im.crop((left, top, left + fw, top + fh))
 
 
-def set_slot_border(slot, color):
-    frames = get_frames()
-    if 0 <= slot < len(frames):
-        thickness = {"#e74c3c": 4, "#f39c12": 3, "#27ae60": 2}.get(color, 1)
-        frames[slot].config(highlightbackground=color, highlightthickness=thickness)
-
-
 def render_frame(slot, pil_img, color):
     labels = get_labels()
     frames = get_frames()
     lbl = labels[slot]
     frm = frames[slot]
 
-    # Calcular grosor del borde para ajustar el Label
     thickness = 0
     if color:
         thickness = {"#e74c3c": 4, "#f39c12": 3, "#27ae60": 2}.get(color, 1)
@@ -253,7 +241,6 @@ def render_frame(slot, pil_img, color):
         frm.config(highlightbackground="#1e1e1e", highlightthickness=1)
         thickness = 1
 
-    # El Label debe quedar DENTRO del borde: dejar margen igual al grosor
     m = thickness
     fw = frm.winfo_width()
     fh = frm.winfo_height()
@@ -264,7 +251,6 @@ def render_frame(slot, pil_img, color):
     lbl.configure(image=photo, text="", compound="center", bg="#000")
     lbl.image = photo
     lbl.place(x=m, y=m, width=lw, height=lh)
-
 
 
 def recibir_video(conn, addr):
@@ -320,6 +306,9 @@ def recibir_video(conn, addr):
                 frame = yolo.procesar(frame, es_bgr=True)
                 color = yolo.last_color if yolo.activo else None
                 im = resize_cover(frame, current_slot)
+                # render_frame se llama en main thread con after(0)
+                # pil_img se crea aqui (hilo de red) pero PhotoImage se crea
+                # dentro de render_frame que corre en main thread — correcto
                 ventana.after(0, render_frame, current_slot, im, color)
 
         except Exception as e:
@@ -383,7 +372,6 @@ def correr_servidor():
         log(f"- Error servidor: {e}")
 
 
-
 def _broadcast(msg: str):
     encoded = msg.encode("utf-8")
     with clients_lock:
@@ -405,11 +393,9 @@ def enviar_mensaje_al_cliente(event=None):
     log(f"> {texto}")
 
 
-
 def cmd_send(cmd: str):
     _broadcast(f"SERIAL:{cmd}")
     log(f"> {cmd.strip()}")
-
 
 
 def toggle_serial():
@@ -424,7 +410,6 @@ def toggle_serial():
         _broadcast("SERIAL:OFF")
         log("- Serial DESACTIVADO")
     relayout(_current_w, _current_h, force=True)
-
 
 
 def toggle_servidor():
@@ -489,7 +474,6 @@ def on_close():
     ventana.destroy()
 
 
-
 ventana = tk.Tk()
 ventana.title("Servidor - Vista de Camara")
 ventana.resizable(True, True)
@@ -501,7 +485,6 @@ ventana.bind("<F1>",     lambda e: ventana.attributes("-fullscreen", True))
 ventana.bind("<Configure>", on_resize)
 
 audio_panel = AudioPanel(master=ventana, role="server")
-
 
 FImagen = tk.Frame(ventana, bg="#000", highlightbackground="#1e1e1e", highlightthickness=1)
 LImagen = tk.Label(FImagen, background="#1e1e1e", anchor="center")

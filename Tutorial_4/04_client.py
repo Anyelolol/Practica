@@ -26,7 +26,6 @@ BACKEND = cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_V4L2
 
 def detectar_camaras() -> list:
     disponibles = []
-    indices = []
     if platform.system() == "Linux":
         import glob, subprocess as sp
         indices = []
@@ -51,12 +50,16 @@ def detectar_camaras() -> list:
         indices = list(range(MAX_CAMARAS))
 
     for i in indices:
+        if len(disponibles) >= MAX_CAMARAS:
+            break
         cap = cv2.VideoCapture(i, BACKEND)
         if cap.isOpened():
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             ret, frame = cap.read()
             if ret and frame is not None and frame.size > 0:
                 disponibles.append(i)
         cap.release()
+        time.sleep(0.05)
     return disponibles
 
 
@@ -117,9 +120,8 @@ class StreamCamara:
                     continue
                 small = cv2.resize(frame, (426, 240))
                 rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-                im = Image.fromarray(rgb)
-                img = ImageTk.PhotoImage(image=im)
-                self.preview_label.after(0, self._set_preview, img)
+                # Mandar numpy array — PhotoImage se crea en main thread
+                self.preview_label.after(0, self._set_preview, rgb.copy())
                 data = pickle.dumps((self.cam_index, rgb))
                 header = struct.pack("Q", len(data))
                 self.sock.sendall(header + data)
@@ -146,7 +148,10 @@ class StreamCamara:
             except:
                 break
 
-    def _set_preview(self, img):
+    def _set_preview(self, rgb_array):
+        # PhotoImage creado en main thread — thread-safe
+        im = Image.fromarray(rgb_array)
+        img = ImageTk.PhotoImage(image=im)
         self.preview_label.configure(image=img, text="")
         self.preview_label.image = img
 
@@ -389,12 +394,11 @@ class ClienteCamara:
         self.btn_conectar.config(state=tk.DISABLED)
         self.btn_desconectar.config(state=tk.NORMAL)
 
-        for i, idx in enumerate(self.camaras):
-            if i < len(self.preview_labels):
-                lbl = self.preview_labels[i]
-                s = StreamCamara(idx, ip, port, lbl, self.log, self._on_error, self)
-                if s.iniciar():
-                    self.streams[idx] = s
+        for i, idx in enumerate(self.camaras[:MAX_CAMARAS]):
+            lbl = self.preview_labels[i]
+            s = StreamCamara(idx, ip, port, lbl, self.log, self._on_error, self)
+            if s.iniciar():
+                self.streams[idx] = s
 
     def desconectar_todo(self):
         for s in self.streams.values():
