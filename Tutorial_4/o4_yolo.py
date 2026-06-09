@@ -2,6 +2,7 @@ import threading
 import tkinter as tk
 import numpy as np
 import cv2
+import time
 
 _yolo_disponible = False
 try:
@@ -11,34 +12,32 @@ try:
 except ImportError:
     pass
 
-# CALIBRACIÓN: Ajusta este valor según tu webcam.
-# Si a 1 metro de distancia la persona mide H píxeles en pantalla, usa: FOCAL_LENGTH = H / 1.70
-FOCAL_LENGTH = 550
-ALTURA_PERSONA_REAL = 0.55  # metros
 MODEL_PATH = "yolo11n-pose.pt"
 
-# Suavizado: cuántos frames consecutivos debe mantenerse un color antes de cambiar
+UMBRAL_ROJO = 170
+UMBRAL_NARANJA = 70
+
 _COLOR_HOLD_FRAMES = 4
 
 
-def _color_distancia(dist):
-    if dist is None:
+def _color_altura(altura_px):
+    if altura_px is None:
         return None
-    if dist >= 6.5:
-        return "#27ae60"  # Verde  : ≥ 6.5 m (Distancia segura)
-    if dist >= 1.0:
-        return "#f39c12"  # Naranja: 1.0 m a 6.5 m (Precaución)
-    return "#e74c3c"  # Rojo   : < 1.0 m (Peligro / Muy cerca)
+    if altura_px >= UMBRAL_ROJO:
+        return "#e74c3c"  # Rojo: Muy cerca
+    if altura_px >= UMBRAL_NARANJA:
+        return "#f39c12"  # Naranja: Precaución
+    return "#27ae60"  # Verde: Distancia segura
 
 
-def _grosor_distancia(dist):
-    if dist is None:
+def _grosor_altura(altura_px):
+    if altura_px is None:
         return 1
-    if dist >= 6.5:
-        return 1  # Verde: Margen de 1 píxel
-    if dist >= 1.0:
-        return 3  # Naranja: Margen de 3 píxeles
-    return 5  # Rojo: Margen de 5 píxeles
+    if altura_px >= UMBRAL_ROJO:
+        return 5  # Margen de 5 píxeles para Rojo
+    if altura_px >= UMBRAL_NARANJA:
+        return 3  # Margen de 3 píxeles para Naranja
+    return 1  # Margen de 1 píxel para Verde
 
 
 class YoloPoseProcessor:
@@ -49,7 +48,7 @@ class YoloPoseProcessor:
         self._lock = threading.Lock()
         self._last_color: str | None = None
 
-        # Suavizado anti-parpadeo: buffer de los últimos N colores crudos
+        # Suavizado anti-parpadeo
         self._color_history: list[str | None] = []
         self._stable_color: str | None = None
 
@@ -101,9 +100,14 @@ class YoloPoseProcessor:
         bgr = frame if es_bgr else cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
         try:
+            t0 = time.time()
             results = model(bgr, conf=0.5, verbose=False)
+            dt_ms = (time.time() - t0) * 1000
+
             bgr, raw_color = self._analizar(bgr, results)
             self._last_color = self._smooth_color(raw_color)
+            print(f"[YOLO Perf] Inferencia: {dt_ms:.1f} ms | Color detectado: {raw_color}")
+
         except Exception as e:
             print(f"[YOLO] Error inferencia: {e}")
             self._last_color = None
@@ -112,7 +116,6 @@ class YoloPoseProcessor:
         return bgr if es_bgr else cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
     def _smooth_color(self, raw: str | None) -> str | None:
-        """Devuelve un color estable reduciendo el parpadeo espurio."""
         self._color_history.append(raw)
         if len(self._color_history) > _COLOR_HOLD_FRAMES:
             self._color_history.pop(0)
@@ -132,37 +135,32 @@ class YoloPoseProcessor:
 
         return self._stable_color
 
-    def _estimar_distancia(self, altura_px):
-        if altura_px <= 0:
-            return None
-        dist = round((ALTURA_PERSONA_REAL * FOCAL_LENGTH) / altura_px, 2)
-
-        # LOG EN CONSOLA: Te servirá para calibrar tu FOCAL_LENGTH exacta en tiempo real
-        print(f"[YOLO Debug] Altura: {altura_px}px -> Distancia Estimada: {dist}m")
-        return dist
-
     def _obtener_altura(self, bbox):
-        """Calcula la altura usando estrictamente el Bounding Box para evitar saltos"""
         x1, y1, x2, y2 = bbox
-        return max(1, int(abs(y2 - y1)))
+        altura = int(abs(y2 - y1))
+        return max(1, altura)
 
     def _analizar(self, frame, results):
-        min_dist = None
+        max_altura = 0
+        detectado = False
+
         for result in results:
             if result.boxes is None:
                 continue
             boxes = result.boxes.xyxy.cpu().numpy()
 
             for bbox in boxes:
-                # Obtenemos la altura directa de la caja de predicción
+                detectado = True
                 altura_px = self._obtener_altura(bbox)
-                dist = self._estimar_distancia(altura_px)
+                # Buscamos la caja más alta (la persona más cercana)
+                if altura_px > max_altura:
+                    max_altura = altura_px
 
-                if dist is not None:
-                    if min_dist is None or dist < min_dist:
-                        min_dist = dist
+        if not detectado:
+            return frame, None
+        print(f"[YOLO BBox Debug] Altura detectada: {max_altura}px / 240px")
 
-        color_hex = _color_distancia(min_dist)
+        color_hex = _color_altura(max_altura)
         return frame, color_hex
 
 
