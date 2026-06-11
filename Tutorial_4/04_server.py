@@ -10,7 +10,7 @@ import platform
 import os
 import cv2
 import numpy as np
-import time  # Añadido para el control de retrasos en hilos consumidores
+import time
 from o4_audio import AudioPanel, make_audio_button
 from o4_yolo import YoloPoseProcessor
 
@@ -223,7 +223,6 @@ def swap_to_primary(slot_index):
         primary_addr = target_key
 
 
-# ── OPTIMIZACIÓN: REESCALADO NATIVO ULTRA RÁPIDO CON OPENCV ──
 def resize_cover(frame_array, slot):
     fw, fh = SLOT_DIMS[slot]
     ih, iw = frame_array.shape[:2]
@@ -231,15 +230,12 @@ def resize_cover(frame_array, slot):
     scale = max(fw / iw, fh / ih)
     nw, nh = int(iw * scale), int(ih * scale)
 
-    # Redimensionamiento optimizado en C++ (mucho más rápido que PIL Lanczos)
     resized = cv2.resize(frame_array, (nw, nh), interpolation=cv2.INTER_LINEAR)
 
-    # Recorte instantáneo mediante slicing de matrices de NumPy
     left = (nw - fw) // 2
     top = (nh - fh) // 2
     cropped = resized[top:top + fh, left:left + fw]
 
-    # Pasamos a RGB y PIL únicamente al final para que Tkinter lo dibuje
     cropped_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
     return Image.fromarray(cropped_rgb)
 
@@ -282,11 +278,11 @@ def procesar_cliente(ak, num):
                 break
             if "latest_jpeg" in clients[ak] and clients[ak]["latest_jpeg"] is not None:
                 jpg_data = clients[ak]["latest_jpeg"]
-                clients[ak]["latest_jpeg"] = None  # Marcamos como consumido
+                clients[ak]["latest_jpeg"] = None
                 current_slot = clients[ak]["slot"]
 
         if jpg_data is None:
-            time.sleep(0.005)
+            time.sleep(0.01)
             continue
 
         try:
@@ -307,9 +303,11 @@ def procesar_cliente(ak, num):
                 if not _pending_render[current_slot]:
                     _pending_render[current_slot] = True
 
-                    def do_render(s=current_slot, img=im, c=color):
+                    def do_render(s=current_slot, img=im, c=color, key=ak):
                         try:
-                            render_frame(s, img, c)
+                            with clients_lock:
+                                if key in clients and clients[key]["slot"] == s:
+                                    render_frame(s, img, c)
                         finally:
                             _pending_render[s] = False
 
@@ -318,11 +316,12 @@ def procesar_cliente(ak, num):
             print(f"Error en procesar_cliente #{num}: {e}")
 
 
-# ── HILO DE RED: DISEÑADO ÚNICAMENTE PARA LEER EL SOCKET A MÁXIMA VELOCIDAD ──
 def recibir_video(conn, addr):
     global conexion_counter, primary_addr
 
     ak = addr_key(addr)
+    conn.settimeout(2.0)
+
     with clients_lock:
         conexion_counter += 1
         num = conexion_counter
@@ -332,7 +331,7 @@ def recibir_video(conn, addr):
             "slot": slot,
             "cam_id": "?",
             "num_conexion": num,
-            "latest_jpeg": None  # Buffer de un solo frame
+            "latest_jpeg": None
         }
 
     log(f"- Conexión #{num} desde {addr} slot {slot}")
@@ -347,7 +346,7 @@ def recibir_video(conn, addr):
             while len(buf) < hdr_size:
                 chunk = conn.recv(65536)
                 if not chunk:
-                    raise ConnectionResetError
+                    raise ConnectionResetError("El cliente cerró el socket abruptamente sin enviar datos.")
                 buf += chunk
 
             msg_size = struct.unpack("Q", buf[:hdr_size])[0]
@@ -356,7 +355,7 @@ def recibir_video(conn, addr):
             while len(buf) < msg_size:
                 chunk = conn.recv(65536)
                 if not chunk:
-                    raise ConnectionResetError
+                    raise ConnectionResetError("Cierre prematuro del stream durante la lectura del frame.")
                 buf += chunk
 
             raw = buf[:msg_size]
@@ -371,39 +370,67 @@ def recibir_video(conn, addr):
 
             with clients_lock:
                 if ak in clients:
-                    clients[ak]["cam_id"] = str(cam_id)
+                    str_cam_id = str(cam_id)
+
+                    if str_cam_id != "?":
+                        for old_ak, old_info in list(clients.items()):
+                            if old_ak != ak and old_info.get("cam_id") == str_cam_id:
+                                log(f"- Reconexión de Cámara '{str_cam_id}'. Reemplazando socket zombie.")
+                                clients[ak]["slot"] = old_info["slot"]
+                                try:
+                                    old_info["conn"].shutdown(socket.SHUT_RDWR)
+                                    old_info["conn"].close()
+                                except:
+                                    pass
+                                clients.pop(old_ak, None)
+
+                    clients[ak]["cam_id"] = str_cam_id
                     clients[ak]["latest_jpeg"] = frame
                 else:
                     break
 
+        except (socket.timeout, TimeoutError):
+            log(f"- Stream #{num} inactivo (Deseleccionado / Timeout alcanzado).")
+            break
         except Exception as e:
             log(f"- Stream #{num} terminado ({addr}): {e}")
             break
 
+    slots_to_clear = []
     with clients_lock:
-        freed_slot = clients.get(ak, {}).get("slot", -1)
-        clients.pop(ak, None)
+        if ak in clients:
+            freed_slot = clients[ak]["slot"]
+            clients.pop(ak, None)
+
+            if freed_slot >= 0 and not any(info["slot"] == freed_slot for info in clients.values()):
+                slots_to_clear.append(freed_slot)
+
         if primary_addr == ak:
             primary_addr = None
             remaining = sorted(clients.items(), key=lambda x: x[1]["slot"])
             if remaining:
                 next_ak, next_info = remaining[0]
+                old_slot = next_info["slot"]
                 next_info["slot"] = 0
                 primary_addr = next_ak
+                if not any(info["slot"] == old_slot for info in clients.values()):
+                    slots_to_clear.append(old_slot)
 
-    def clear_slot(s):
+    def clear_slots(slots):
         lbs = get_labels()
         frs = get_frames()
-        if 0 <= s < len(lbs):
-            lbs[s].configure(image="", text="", bg="#1e1e1e")
-            lbs[s].image = None
-        if 0 <= s < len(frs):
-            frs[s].config(highlightbackground="#1e1e1e", highlightthickness=1)
+        for s in slots:
+            if 0 <= s < len(lbs):
+                lbs[s].configure(image="", text="", bg="#1e1e1e")
+                lbs[s].image = None
+            if 0 <= s < len(frs):
+                frs[s].config(highlightbackground="#1e1e1e", highlightthickness=1)
 
-    if freed_slot >= 0:
-        ventana.after(0, clear_slot, freed_slot)
+    if slots_to_clear:
+        ventana.after(0, lambda: clear_slots(slots_to_clear))
 
     try:
+        conn.shutdown(socket.SHUT_RDWR)
         conn.close()
     except:
         pass
@@ -466,6 +493,7 @@ def cmd_send(cmd: str):
     _broadcast(f"SERIAL:{cmd_limpio}\n")
     log(f"> {cmd_limpio}")
 
+
 def toggle_serial():
     global serial_activo
     serial_activo = not serial_activo
@@ -504,6 +532,7 @@ def toggle_servidor():
         with clients_lock:
             for info in clients.values():
                 try:
+                    info["conn"].shutdown(socket.SHUT_RDWR)
                     info["conn"].close()
                 except:
                     pass
@@ -536,6 +565,7 @@ def on_close():
     with clients_lock:
         for info in clients.values():
             try:
+                info["conn"].shutdown(socket.SHUT_RDWR)
                 info["conn"].close()
             except:
                 pass
