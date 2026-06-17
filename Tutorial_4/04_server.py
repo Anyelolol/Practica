@@ -28,6 +28,8 @@ Server_Socket = None
 Servidor_Activo = False
 primary_addr = None
 serial_activo = False
+config_panel_activo = False
+CONFIG_PANEL_H = 200
 
 yolo = YoloPoseProcessor()
 yolo._activo = True
@@ -141,7 +143,8 @@ def relayout(w, h, force=False):
     cmd_bh = 28
     cmd_block = cmd_rows * (cmd_bh + BG)
     bottom_h = BS + PAD + cmd_block + 20 + 34 + PAD * 4
-    log_h = max(60, h - bottom_h - PAD)
+    extra = (CONFIG_PANEL_H + BG) if config_panel_activo else 0
+    log_h = max(60, h - bottom_h - extra - PAD)
 
     bw = (cw - PAD - BG * 2) // 3
     bh = 28
@@ -151,11 +154,21 @@ def relayout(w, h, force=False):
     by = cmd_y - BS - BG
     esty = by - 20 - BG
     ey = esty - 34 - BG
-    log_h = max(40, ey - PAD - BG)
+    panel_y = ey - CONFIG_PANEL_H - BG
+    if config_panel_activo:
+        ey = panel_y - 34 - BG
+        log_h = max(40, ey - PAD - BG)
+    else:
+        log_h = max(40, ey - PAD - BG)
 
     Log_Text.place(x=cx, y=PAD, width=cw - PAD, height=log_h)
     Entry_Mensaje.place(x=cx, y=ey, width=cw - PAD, height=34)
     EstadoLabel.place(x=cx, y=esty, width=cw - PAD, height=20)
+
+    if config_panel_activo:
+        ConfigPanel.place(x=cx, y=panel_y, width=cw - PAD, height=CONFIG_PANEL_H)
+    else:
+        ConfigPanel.place_forget()
 
     Start_Button.place(x=cx, y=by, width=BS, height=BS)
     Btn_Audio.place(x=cx + (BS + BG), y=by, width=BS, height=BS)
@@ -494,6 +507,16 @@ def cmd_send(cmd: str):
     log(f"> {cmd_limpio}")
 
 
+def toggle_config():
+    global config_panel_activo
+    config_panel_activo = not config_panel_activo
+    if config_panel_activo:
+        BTN_CONFIG.config(bg="#e74c3c")
+    else:
+        BTN_CONFIG.config(bg="#2e2e2e")
+    relayout(_current_w, _current_h, force=True)
+
+
 def toggle_serial():
     global serial_activo
     serial_activo = not serial_activo
@@ -634,7 +657,17 @@ MANDO = tk.Button(ventana, text="🛸", bg="#2e2e2e", fg="white",
                   font=("Arial", 16, "bold"), relief="flat", cursor="hand2")
 
 BTN_CONFIG = tk.Button(ventana, text="⚙️", bg="#2e2e2e", fg="white",
-                       font=("Arial", 16, "bold"), relief="flat", cursor="hand2")
+                       font=("Arial", 16, "bold"), relief="flat", cursor="hand2",
+                       command=toggle_config)
+
+ConfigPanel = tk.Frame(ventana, bg="#141414", highlightbackground="#333", highlightthickness=1)
+_cfg_header = tk.Frame(ConfigPanel, bg="#141414")
+_cfg_header.pack(anchor="nw", fill="x", padx=8, pady=6)
+tk.Label(_cfg_header, text="Configuración", bg="#141414", fg="#888",
+         font=("Consolas", 10, "bold")).pack(side="left")
+tk.Button(_cfg_header, text="<-", bg="#641e16", fg="white",
+          font=("Consolas", 9, "bold"), relief="flat", cursor="hand1",
+          width=2, command=toggle_config).pack(side="right")
 
 BTN_TECLADO = tk.Button(ventana, text="⌨️", bg="#2e2e2e", fg="white",
                         font=("Arial", 16, "bold"), relief="flat", cursor="hand2")
