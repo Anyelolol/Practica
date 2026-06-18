@@ -1,9 +1,9 @@
 import customtkinter as ctk
 import os
 import time
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from Core.L_Audio import AudioPanel
 from Core.L_Serial import SerialPanel
 from Core.L_Camaras import CamarasPanel
