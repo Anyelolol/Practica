@@ -1,0 +1,8 @@
+{
+  "baud": 9600,
+  "comandos_autoconexion": [
+    "speed 20",
+    "speedl 20"
+  ],
+  "home_al_conectar": false
+}
