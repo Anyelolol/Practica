@@ -11,6 +11,7 @@ from Config.L_login import AuthServer
 from Config import L_Conection as _conn_mod
 from Core.L_Audio import AudioServer
 from Core.L_Serial import SerialPanel
+from Core.L_mando import MandoPanel
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
@@ -282,6 +283,7 @@ def _abrir_serial():
     T_LogBash.configure(width=245, height=85)
     T_LogBash.place(x=745, y=575)
     audio.hide()
+    mando.hide()
     serial.toggle()
 
 
@@ -291,8 +293,17 @@ def _abrir_audio():
     T_LogBash.configure(width=245, height=85)
     T_LogBash.place(x=745, y=575)
     serial.hide()
+    mando.hide()
     audio.toggle()
 
+def _abrir_mando():
+    F_Tool.place(x=995, y=400)
+    modo_tool[0] = False
+    T_LogBash.configure(width=245, height=85)
+    T_LogBash.place(x=745, y=575)
+    audio.hide()
+    serial.hide()
+    mando.toggle()
 
 B_Logout = ctk.CTkButton(ventana, width=SIDE_W, height=65, text="<-", font=FONT,
                           command=ir_a_login, fg_color=PANEL, border_color=BORDER, border_width=2)
@@ -311,7 +322,7 @@ B_Teclado = ctk.CTkButton(ventana, width=SIDE_W, height=65, text="⌨️", font=
 B_Teclado.place(x=SIDE_X, y=400)
 
 B_Mando = ctk.CTkButton(ventana, width=SIDE_W, height=65, text="🛸", font=FONT,
-                          fg_color=PANEL, border_color=BORDER, border_width=2)
+                          fg_color=PANEL, border_color=BORDER, border_width=2, command=_abrir_mando)
 B_Mando.place(x=SIDE_X, y=470)
 
 B_Serial = ctk.CTkButton(ventana, width=SIDE_W, height=65, text="🔌", font=FONT,
@@ -363,7 +374,7 @@ def _enviar_serial_remoto(cmd: str):
     else:
         _log("[serial] servidor apagado, comando ignorado")
 
-
+mando = MandoPanel(tool_frame=F_Tool, enviar_fn=_enviar_serial_remoto)
 audio  = AudioServer(parent_frame=F_Tool)
 serial = SerialPanel(tool_frame=F_Tool, enviar_fn=_enviar_serial_remoto)
 serial.build()
