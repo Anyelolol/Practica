@@ -9,9 +9,11 @@ import atexit
 
 PORT       = 8888
 AUDIO_PORT = 9999
+AUTH_PORT  = 8889
 MAX_CLIENTS = 4
 RULE_NAME  = "CastorServer_Temp_8888"
 RULE_AUDIO = "CastorServer_Temp_9999"
+RULE_AUTH  = "CastorServer_Temp_8889"
 
 
 def is_admin() -> bool:
@@ -55,7 +57,8 @@ def open_ports(log_fn=None):
     _log = log_fn or (lambda m: None)
     _fw_open(PORT, RULE_NAME)
     _fw_open(AUDIO_PORT, RULE_AUDIO)
-    _log(f"puertos {PORT} y {AUDIO_PORT} abiertos en firewall")
+    _fw_open(AUTH_PORT, RULE_AUTH)
+    _log(f"puertos {PORT}, {AUDIO_PORT} y {AUTH_PORT} abiertos en firewall")
     if platform.system() == "Windows":
         atexit.register(lambda: close_ports())
 
@@ -63,6 +66,19 @@ def open_ports(log_fn=None):
 def close_ports():
     _fw_close(PORT, RULE_NAME)
     _fw_close(AUDIO_PORT, RULE_AUDIO)
+    _fw_close(AUTH_PORT, RULE_AUTH)
+
+
+def open_auth_port(log_fn=None):
+    _log = log_fn or (lambda m: None)
+    _fw_open(AUTH_PORT, RULE_AUTH)
+    _log(f"puerto {AUTH_PORT} (token) abierto en firewall")
+    if platform.system() == "Windows":
+        atexit.register(lambda: close_auth_port())
+
+
+def close_auth_port():
+    _fw_close(AUTH_PORT, RULE_AUTH)
 
 
 def get_local_ip() -> str:
@@ -77,12 +93,13 @@ def get_local_ip() -> str:
 
 
 class ConectionServer:
-    def __init__(self, slots: list[dict], log_fn=None, on_serial_fn=None, on_layout_fn=None, on_yolo_fn=None):
+    def __init__(self, slots: list[dict], log_fn=None, on_serial_fn=None, on_layout_fn=None, on_yolo_fn=None, on_client_msg_fn=None):
         self._slots      = slots
         self._log        = log_fn or (lambda m: None)
         self._on_serial  = on_serial_fn or (lambda cmd: None)
         self._on_layout  = on_layout_fn or (lambda n: None)
-        self._on_yolo    = on_yolo_fn or (lambda color: None)
+        self._on_yolo    = on_yolo_fn or (lambda color, nivel=-1.0: None)
+        self._on_client_msg = on_client_msg_fn or (lambda ak, msg: None)
         self._clients: dict = {}
         self._lock       = threading.Lock()
         self._primary_addr: str | None = None
@@ -201,6 +218,10 @@ class ConectionServer:
 
         ak = f"{addr[0]}:{addr[1]}"
         conn.settimeout(5.0)
+        try:
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            pass
 
         with self._lock:
             self._counter += 1
@@ -252,6 +273,14 @@ class ConectionServer:
                 else:
                     cam_id, frame = "?", payload
 
+                # Mensajes de control (chat) viajan por el mismo canal que el
+                # video pero no son un frame: se reconocen por su tag y no se
+                # intentan decodificar como imagen.
+                if cam_id == "MSG":
+                    self._log(f"[cli→srv] {frame}")
+                    self._on_client_msg(ak, str(frame))
+                    continue
+
                 if isinstance(frame, np.ndarray) and frame.ndim == 3:
                     bgr = frame
                 else:
@@ -263,9 +292,15 @@ class ConectionServer:
                         break
                     str_id = str(cam_id)
                     if str_id != "?":
+                        mi_ip = addr[0]
                         for old_ak, old_info in list(self._clients.items()):
-                            if old_ak != ak and old_info.get("cam_id") == str_id:
-                                self._log(f"reconexión cam '{str_id}'")
+                            # Solo se considera "la misma camara reconectando"
+                            # si ademas viene de la misma IP: el id de camara
+                            # (indice local de OpenCV) se repite entre
+                            # maquinas distintas y antes los pisaba.
+                            old_ip = old_ak.rsplit(":", 1)[0]
+                            if old_ak != ak and old_info.get("cam_id") == str_id and old_ip == mi_ip:
+                                self._log(f"reconexión cam '{str_id}' ({mi_ip})")
                                 self._clients[ak]["slot"] = old_info["slot"]
                                 try:
                                     old_info["conn"].shutdown(socket.SHUT_RDWR)
@@ -344,8 +379,6 @@ class ConectionServer:
 
         import cv2
 
-        SLOT_COLORS = {"#e74c3c": 5, "#f39c12": 3, "#27ae60": 1}
-
         def _resize_cover(frame_bgr, w, h):
             ih, iw = frame_bgr.shape[:2]
             scale  = max(w / iw, h / ih)
@@ -360,7 +393,7 @@ class ConectionServer:
         while self._activo:
             bgr          = None
             current_slot = -1
-            color        = None
+            yolo_info    = None
 
             with self._lock:
                 if ak not in self._clients:
@@ -370,7 +403,7 @@ class ConectionServer:
                     bgr            = info["latest"]
                     info["latest"] = None
                     current_slot   = info["slot"]
-                    color          = info.get("yolo_color")
+                    yolo_info      = info.get("yolo_color")
 
             if bgr is None:
                 threading.Event().wait(0.01)
@@ -391,7 +424,7 @@ class ConectionServer:
                 if not self._pending[current_slot]:
                     self._pending[current_slot] = True
 
-                    def _render(s=current_slot, img=ctk_img, c=color, key=ak):
+                    def _render(s=current_slot, img=ctk_img, info=yolo_info, key=ak):
                         try:
                             with self._lock:
                                 if key not in self._clients:
@@ -402,12 +435,13 @@ class ConectionServer:
                             frm = self._slots[s]["frame"]
                             lbl.configure(image=img, text="")
                             lbl._ctk_image = img
-                            if c and c in SLOT_COLORS:
-                                frm.configure(border_color=c, border_width=SLOT_COLORS[c])
+                            if info:
+                                c, w, nivel = info
                             else:
-                                frm.configure(border_color="#1e1e1e", border_width=1)
+                                c, w, nivel = "#1e1e1e", 1, -1.0
+                            frm.configure(border_color=c, border_width=w)
                             if s == 0:
-                                self._on_yolo(c)
+                                self._on_yolo(c, nivel)
                         finally:
                             self._pending[s] = False
 
@@ -449,10 +483,10 @@ class ConectionServer:
 
             try:
                 yolo.procesar(bgr, es_bgr=True)
-                color = yolo.last_color
+                info_color = (yolo.last_color, yolo.last_border_width, yolo.last_level)
             except Exception:
-                color = None
+                info_color = None
 
             with self._lock:
                 if ak in self._clients:
-                    self._clients[ak]["yolo_color"] = color
+                    self._clients[ak]["yolo_color"] = info_color

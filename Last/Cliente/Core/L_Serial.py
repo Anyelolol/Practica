@@ -1,8 +1,13 @@
 import glob
+import os
 import platform
+import sys
 import threading
 import time
 import customtkinter as ctk
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from Config.L_SerialConfig import cargar_config
 
 try:
     import serial
@@ -161,27 +166,28 @@ class SerialPanel:
         if not puerto:
             self._set_status("sin puerto", "#e74c3c")
             return
+
+        cfg = cargar_config()
+        baud = cfg.get("baud", BAUD)
+        comandos_auto = cfg.get("comandos_autoconexion", [])
+        home_al_conectar = cfg.get("home_al_conectar", False)
+
         try:
             self._port = serial.Serial(
-                port=puerto, baudrate=BAUD,
+                port=puerto, baudrate=baud,
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
                 timeout=1,
                 xonxoff=False, rtscts=False, dsrdtr=False,
             )
-            time.sleep(1)
-            self._port.write(b"speed 20\r")
-            self._port.flush()
-            time.sleep(1)
-            self._port.write(b"speedl 20\r")
-            self._port.flush()
-            time.sleep(1)
-            self._port.write(b"home\r")
-            self._port.flush()
+            for cmd in comandos_auto:
+                self._port.write(cmd.encode("utf-8") + b"\r")
+                self._port.flush()
+            if home_al_conectar:
+                self._port.write(b"home\r")
+                self._port.flush()
             self._set_status("conectado", "#2ecc71")
-            time.sleep(0.7) 
-            self._set_status("home", "#2ecc71")
             self._after(lambda: self._btn_toggle.configure(text="desconectar", text_color="#e74c3c"))
         except Exception as e:
             self._set_status(f"error: {e}", "#e74c3c")

@@ -41,11 +41,11 @@ ip_local = get_local_ip()
 FImagen = ctk.CTkFrame(ventana, width=200, height=200, fg_color="#000", border_color="#1e1e1e", border_width=2)
 FImagen.place(x=140, y=5)
 
-L_Correo = ctk.CTkLabel(ventana, width=65, height=65, text="Correo", font=("Consolas", 25, "bold"), fg_color="#000", text_color="white")
-L_Correo.place(x=50, y=230)
+L_Usuario = ctk.CTkLabel(ventana, width=65, height=65, text="Usuario", font=("Consolas", 25, "bold"), fg_color="#000", text_color="white")
+L_Usuario.place(x=50, y=230)
 
-E_Correo = ctk.CTkEntry(ventana, width=280, height=65, font=("Consolas", 28, "bold"), fg_color="#000")
-E_Correo.place(x=150, y=230)
+E_Usuario = ctk.CTkEntry(ventana, width=280, height=65, font=("Consolas", 28, "bold"), fg_color="#000")
+E_Usuario.place(x=150, y=230)
 
 L_Token = ctk.CTkLabel(ventana, width=65, height=65, text="Token", font=("Consolas", 28, "bold"), fg_color="#000", text_color="white")
 L_Token.place(x=105, y=300)

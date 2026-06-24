@@ -26,9 +26,10 @@ CAM_H        = 180
 BACKEND      = cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_V4L2
 
 
-def detectar_camaras() -> list:
+def detectar_camaras(excluir: set | None = None) -> list:
     if not CV2_OK:
         return []
+    excluir = excluir or set()
     disponibles = []
     if platform.system() == "Linux":
         import glob
@@ -55,6 +56,12 @@ def detectar_camaras() -> list:
         indices = list(range(8))
 
     for i in indices:
+        if i in excluir:
+            # Ya esta siendo usada por un stream activo: no la abrimos de
+            # nuevo (abrir el mismo dispositivo dos veces a la vez es lo que
+            # hacia que la camara en uso se bugueara al volver a buscar).
+            disponibles.append(i)
+            continue
         cap = cv2.VideoCapture(i, BACKEND)
         if cap.isOpened():
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -74,6 +81,8 @@ class StreamCamara:
         self.on_error     = on_error_fn
         self.activo       = False
         self.captura      = None
+        self._hilo        = None
+        self._deteniendo_manual = False
         self._frame_queue = queue.Queue(maxsize=1)
         self._conn = Conection(
             cam_index    = cam_index,
@@ -85,7 +94,11 @@ class StreamCamara:
         )
 
     def _on_conn_error(self, e):
-        if self.activo and self.captura is not None:
+        # Si nosotros mismos cerramos la conexion (detener() de por medio),
+        # el cierre del socket genera un error "normal" que no hay que
+        # mostrar. Cualquier otro error (incluido el fallo de conexion
+        # inicial, antes de que self.activo sea True) si se debe reportar.
+        if not self._deteniendo_manual:
             self.on_error(self.cam_index, e)
 
     def iniciar(self) -> bool:
@@ -97,19 +110,22 @@ class StreamCamara:
             self.on_error(self.cam_index, "no se pudo abrir camara")
             return False
         self.activo = True
-        threading.Thread(target=self._capturar, daemon=True).start()
+        self._hilo = threading.Thread(target=self._capturar, daemon=True)
+        self._hilo.start()
         return True
 
     def detener(self):
         self.activo = False
+        self._deteniendo_manual = True
         self._conn.desconectar()
-        cap = self.captura
-        self.captura = None
-        if cap:
-            try:
-                cap.release()
-            except Exception:
-                pass
+        # Importante: no tocamos self.captura ni lo liberamos desde aca.
+        # El propio hilo de _capturar es el que abre y lee la camara; si la
+        # liberamos en paralelo mientras el todavia esta en medio de un
+        # .read(), se puede romper/crashear. Esperamos a que el hilo note
+        # self.activo=False y termine solo (el release queda en su finally).
+        hilo = self._hilo
+        if hilo and hilo.is_alive():
+            hilo.join(timeout=2.0)
 
     def _capturar(self):
         _preview_pending = False
@@ -166,12 +182,13 @@ class StreamCamara:
 
 class CamarasPanel:
     def __init__(self, scroll_frame: ctk.CTkScrollableFrame, get_ip_fn, get_port_fn,
-                 on_serial_fn=None, on_msg_fn=None):
+                 on_serial_fn=None, on_msg_fn=None, log_fn=None):
         self.scroll_frame = scroll_frame
         self.get_ip       = get_ip_fn
         self.get_port     = get_port_fn
         self.on_serial_fn = on_serial_fn
         self.on_msg_fn    = on_msg_fn
+        self._log_fn      = log_fn or (lambda text: None)
 
         self._streams: dict  = {}
         self._streams_lock   = threading.Lock()
@@ -191,7 +208,9 @@ class CamarasPanel:
         threading.Thread(target=self._detectar_hilo, daemon=True).start()
 
     def _detectar_hilo(self):
-        cams = detectar_camaras()
+        with self._streams_lock:
+            en_uso = set(self._streams.keys())
+        cams = detectar_camaras(excluir=en_uso)
         self.scroll_frame.after(0, lambda: self._mostrar(cams))
 
     def _mostrar(self, encontradas: list):
@@ -314,11 +333,14 @@ class CamarasPanel:
         self._desconectando = True
         self._transmitiendo  = False
         with self._streams_lock:
-            for s in self._streams.values():
-                s.detener()
+            streams = list(self._streams.values())
             self._streams.clear()
             for idx in self._stream_gen:
                 self._stream_gen[idx] += 1
+        # detener() puede tardar (espera a que el hilo de captura de cada
+        # camara termine solo); se hace en background para no congelar la UI.
+        for s in streams:
+            threading.Thread(target=s.detener, daemon=True).start()
         self._desconectando = False
         self._set_status("desconectado", FG_DIM)
         self._preview_gen += 1
@@ -363,7 +385,7 @@ class CamarasPanel:
                 a_iniciar.append((idx, slot["label"], self._stream_gen[idx]))
 
         for s in a_detener:
-            s.detener()
+            threading.Thread(target=s.detener, daemon=True).start()
 
         for idx, lbl, gen in a_iniciar:
             lbl.configure(image=None, text=f"conectando cam {idx}…")
@@ -405,7 +427,8 @@ class CamarasPanel:
             if slot["cam_idx"] == idx:
                 slot["label"].after(0, lambda l=slot["label"]: l.configure(
                     image=None, text=f"fallo cam {idx}"))
-        self._set_status(f"error cam {idx}: {msg}", "#e74c3c")
+        self._log_fn(f"[error cam {idx}] {msg}")
+        self._set_status(f"error cam {idx}", "#e74c3c")
 
     def _set_status(self, text: str, color: str):
         if self._lbl_status and self._lbl_status.winfo_exists():

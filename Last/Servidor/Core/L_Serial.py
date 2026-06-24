@@ -13,6 +13,11 @@ COMANDOS = [
 
 
 class SerialPanel:
+    """
+    Panel de control remoto del servidor.
+    No abre puerto serie propio: solo envia comandos por red al
+    Cliente, que es quien tiene el puerto serie real conectado al brazo.
+    """
 
     def __init__(self, tool_frame: ctk.CTkFrame, enviar_fn=None):
         self.tool_frame = tool_frame

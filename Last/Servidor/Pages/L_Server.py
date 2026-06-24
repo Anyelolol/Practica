@@ -1,11 +1,14 @@
 import customtkinter as ctk
 import subprocess
 import threading
+import secrets
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from Config.L_Conection import ConectionServer, get_local_ip
+from Config.L_login import AuthServer
+from Config import L_Conection as _conn_mod
 from Core.L_Audio import AudioServer
 from Core.L_Serial import SerialPanel
 
@@ -189,10 +192,28 @@ F_T3.bind("<Button-1>", lambda e: _swap(3))
 
 
 
-_YOLO_BG = {"#e74c3c": "#2b0000", "#f39c12": "#2b1a00", "#27ae60": "#002b08"}
+_BG_RGB        = (0x11, 0x11, 0x11)
+_VERDE_BG_RGB   = (0x00, 0x2b, 0x08)
+_NARANJA_BG_RGB = (0x2b, 0x1a, 0x00)
+_ROJO_BG_RGB    = (0x2b, 0x00, 0x00)
+_ANCLAS_BG = [(-1, _BG_RGB), (0, _VERDE_BG_RGB), (1, _NARANJA_BG_RGB), (2, _ROJO_BG_RGB)]
 
-def _on_yolo(color: str | None):
-    bg = _YOLO_BG.get(color, BG)
+
+def _bg_desde_nivel(nivel: float) -> str:
+    if nivel <= _ANCLAS_BG[0][0]:
+        rgb = _ANCLAS_BG[0][1]
+    else:
+        rgb = _ANCLAS_BG[-1][1]
+        for (n0, rgb0), (n1, rgb1) in zip(_ANCLAS_BG, _ANCLAS_BG[1:]):
+            if n0 <= nivel <= n1:
+                t = (nivel - n0) / (n1 - n0)
+                rgb = tuple(round(rgb0[k] + (rgb1[k] - rgb0[k]) * t) for k in range(3))
+                break
+    return "#%02x%02x%02x" % rgb
+
+
+def _on_yolo(color: str | None, nivel: float = -1.0):
+    bg = _bg_desde_nivel(nivel)
     ventana.after(0, lambda: ventana.configure(fg_color=bg))
 
 
@@ -236,6 +257,8 @@ def _toggle_on():
 def ir_a_login():
     if _servidor_activo[0]:
         _apagar_servidor()
+    auth.detener()
+    _conn_mod.close_auth_port()
     ventana.destroy()
     subprocess.Popen([sys.executable, os.path.join(BASE_DIR, "L_Server_login.py")])
 
@@ -321,6 +344,17 @@ T_LogBash.place(x=745, y=575)
 F_Tool = ctk.CTkFrame(ventana, width=205, height=260, fg_color="transparent",
                        border_color=BORDER, border_width=2)
 F_Tool.place(x=995, y=400)
+
+
+def _cerrar_ventana():
+    if _servidor_activo[0]:
+        _apagar_servidor()
+    auth.detener()
+    _conn_mod.close_auth_port()
+    ventana.destroy()
+
+
+ventana.protocol("WM_DELETE_WINDOW", _cerrar_ventana)
 
 def _enviar_serial_remoto(cmd: str):
     if conexion and _servidor_activo[0]:

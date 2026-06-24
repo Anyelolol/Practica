@@ -20,6 +20,7 @@ class Conection:
         self.sock      = None
         self.activo    = False
         self._frame_q  = queue.Queue(maxsize=1)
+        self._send_lock = threading.Lock()
 
     def conectar(self) -> bool:
         try:
@@ -27,6 +28,10 @@ class Conection:
             self.sock.settimeout(5)
             self.sock.connect((self.ip, self.port))
             self.sock.settimeout(None)
+            try:
+                self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except Exception:
+                pass
         except Exception as e:
             self.on_error(self.cam_index, f"TCP connect: {e}")
             return False
@@ -54,6 +59,22 @@ class Conection:
                 pass
             self._frame_q.put_nowait(jpg_buf)
 
+    def enviar_mensaje(self, msg: str) -> bool:
+        """Manda un mensaje de control (chat) al servidor por el mismo socket
+        que el video, pero serializado con el lock para no pisarse con el
+        hilo que esta mandando frames al mismo tiempo."""
+        if not self.activo or not self.sock:
+            return False
+        try:
+            data   = pickle.dumps(("MSG", msg))
+            header = struct.pack("Q", len(data))
+            with self._send_lock:
+                self.sock.sendall(header + data)
+            return True
+        except Exception as e:
+            self.on_error(self.cam_index, f"envio mensaje: {e}")
+            return False
+
     def _hilo_enviar(self):
         try:
             while self.activo:
@@ -65,7 +86,8 @@ class Conection:
                     break
                 data   = pickle.dumps((self.cam_index, jpg_buf))
                 header = struct.pack("Q", len(data))
-                self.sock.sendall(header + data)
+                with self._send_lock:
+                    self.sock.sendall(header + data)
         except Exception as e:
             if self.activo:
                 self.on_error(self.cam_index, f"envio: {e}")
